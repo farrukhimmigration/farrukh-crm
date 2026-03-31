@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 import './index.css'
 
+// Global error boundary to show errors instead of white screen
 class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props)
@@ -14,13 +15,40 @@ class ErrorBoundary extends React.Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{minHeight:'100vh',background:'#1a1a2e',display:'flex',alignItems:'center',justifyContent:'center',padding:'24px'}}>
-          <div style={{background:'rgba(255,255,255,0.1)',borderRadius:'16px',padding:'32px',maxWidth:'600px',width:'100%',border:'1px solid rgba(255,255,255,0.2)'}}>
-            <h1 style={{color:'#f59e0b',fontWeight:900,fontSize:'20px',marginBottom:'16px'}}>⚠️ CRM Error</h1>
-            <div style={{background:'rgba(0,0,0,0.4)',borderRadius:'8px',padding:'16px',fontFamily:'monospace',fontSize:'12px',color:'#f87171',wordBreak:'break-all',whiteSpace:'pre-wrap'}}>
-              {this.state.error?.message || 'Unknown error'}{'\n\n'}{this.state.error?.stack?.slice(0,500)||''}
+        <div style={{
+          minHeight: '100vh', background: '#1a1a2e', display: 'flex',
+          alignItems: 'center', justifyContent: 'center', padding: '24px'
+        }}>
+          <div style={{
+            background: 'rgba(255,255,255,0.1)', borderRadius: '16px',
+            padding: '32px', maxWidth: '600px', width: '100%',
+            border: '1px solid rgba(255,255,255,0.2)'
+          }}>
+            <h1 style={{ color: '#f59e0b', fontWeight: 900, fontSize: '20px', marginBottom: '16px' }}>
+              ⚠️ CRM Error — Please Report This
+            </h1>
+            <p style={{ color: '#94a3b8', fontSize: '13px', marginBottom: '12px' }}>
+              The CRM encountered an error. Screenshot this and send to support.
+            </p>
+            <div style={{
+              background: 'rgba(0,0,0,0.4)', borderRadius: '8px', padding: '16px',
+              fontFamily: 'monospace', fontSize: '12px', color: '#f87171',
+              wordBreak: 'break-all', whiteSpace: 'pre-wrap'
+            }}>
+              {this.state.error?.message || 'Unknown error'}
+              {'\n\n'}
+              {this.state.error?.stack?.slice(0, 500) || ''}
             </div>
-            <button onClick={()=>window.location.reload()} style={{marginTop:'16px',background:'#d97706',color:'white',border:'none',borderRadius:'8px',padding:'10px 24px',fontWeight:700,cursor:'pointer'}}>Reload</button>
+            <button
+              onClick={() => window.location.reload()}
+              style={{
+                marginTop: '16px', background: '#d97706', color: 'white',
+                border: 'none', borderRadius: '8px', padding: '10px 24px',
+                fontWeight: 700, cursor: 'pointer'
+              }}
+            >
+              Reload CRM
+            </button>
           </div>
         </div>
       )
@@ -30,5 +58,7 @@ class ErrorBoundary extends React.Component {
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <ErrorBoundary><App /></ErrorBoundary>
+  <ErrorBoundary>
+    <App />
+  </ErrorBoundary>
 )
