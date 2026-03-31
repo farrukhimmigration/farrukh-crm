@@ -2142,14 +2142,17 @@ export default function App() {
   if (!currentUser) return <LoginScreen staff={staffList} onLogin={handleLogin}/>;
 
   const NAV_ITEMS = [
-    { id:'dashboard', label:'Dashboard', icon:LayoutDashboard },
-    { id:'clients',   label:'Clients',   icon:Users           },
+    { id:'dashboard',  label:'Dashboard',  icon:LayoutDashboard },
+    { id:'clients',    label:'Clients',    icon:Users           },
+    { id:'intake',     label:'Smart Intake', icon:Zap           },
+    { id:'schengen',   label:'Schengen AI', icon:Globe          },
+    { id:'docupload',  label:'Doc Upload',  icon:Cloud          },
     ...(isAdmin ? [
-      { id:'staff',    label:'Staff',    icon:Shield   },
-      { id:'activity', label:'Activity', icon:Activity },
+      { id:'staff',    label:'Staff',      icon:Shield          },
+      { id:'activity', label:'Activity',   icon:Activity        },
     ] : []),
-    { id:'archive',  label:'Archive',   icon:Archive  },
-    { id:'settings', label:'Settings',  icon:Settings },
+    { id:'archive',    label:'Archive',    icon:Archive         },
+    { id:'settings',   label:'Settings',   icon:Settings        },
   ];
 
   const renderView = () => {
@@ -2162,12 +2165,15 @@ export default function App() {
       );
     }
     switch(view) {
-      case 'dashboard': return <DashboardView currentUser={currentUser} isAdmin={isAdmin} onSelectClient={id => { setSelectedClientId(id); setView('client-detail'); }}/>;
-      case 'clients':   return <ClientsView   currentUser={currentUser} isAdmin={isAdmin} onSelectClient={id => { setSelectedClientId(id); setView('client-detail'); }}/>;
-      case 'staff':     return isAdmin ? <StaffView currentUser={currentUser}/> : null;
-      case 'activity':  return isAdmin ? <ActivityView currentUser={currentUser}/> : null;
-      case 'archive':   return <ArchiveView currentUser={currentUser} isAdmin={isAdmin} onSelectClient={id => { setSelectedClientId(id); setView('client-detail'); }}/>;
-      case 'settings':  return <SettingsView currentUser={currentUser} isAdmin={isAdmin}/>;
+      case 'dashboard':  return <DashboardView currentUser={currentUser} isAdmin={isAdmin} onSelectClient={id => { setSelectedClientId(id); setView('client-detail'); }}/>;
+      case 'clients':    return <ClientsView   currentUser={currentUser} isAdmin={isAdmin} onSelectClient={id => { setSelectedClientId(id); setView('client-detail'); }}/>;
+      case 'intake':     return <SmartIntakeView currentUser={currentUser} onClientCreated={id=>{ setSelectedClientId(id); setView('client-detail'); }}/>;
+      case 'schengen':   return <SchengenEngineView currentUser={currentUser}/>;
+      case 'docupload':  return <DocUploadView currentUser={currentUser} isAdmin={isAdmin}/>;
+      case 'staff':      return isAdmin ? <StaffView currentUser={currentUser}/> : null;
+      case 'activity':   return isAdmin ? <ActivityView currentUser={currentUser}/> : null;
+      case 'archive':    return <ArchiveView currentUser={currentUser} isAdmin={isAdmin} onSelectClient={id => { setSelectedClientId(id); setView('client-detail'); }}/>;
+      case 'settings':   return <SettingsView currentUser={currentUser} isAdmin={isAdmin}/>;
       default: return null;
     }
   };
@@ -2239,3 +2245,623 @@ export default function App() {
     </div>
   );
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// NEW MODULES: SMART INTAKE + SCHENGEN ENGINE + COVER LETTER GENERATOR
+// 100% FREE — No API Key Required — All Intelligence Hardcoded
+// ══════════════════════════════════════════════════════════════════════════
+
+// ─── SMART INTAKE DATA PARSER (Pure JavaScript — Zero API Cost) ───────────
+const parseClientText = (text) => {
+  const t = text.toLowerCase();
+  const result = {};
+  // Name
+  const nameM = text.match(/(?:name[:\s]+|applicant[:\s]+|client[:\s]+)([A-Z][a-z]+(?: [A-Z][a-z]+)+)/i) ||
+                text.match(/^([A-Z][a-z]+(?: [A-Z][a-z]+)+)/m);
+  if (nameM) result.name = nameM[1].trim();
+  // Phone
+  const phoneM = text.match(/(?:\+92|0092|0)[\s-]?3\d{2}[\s-]?\d{7}/);
+  if (phoneM) result.phone = phoneM[0].replace(/\s/g,'');
+  // CNIC
+  const cnicM = text.match(/\d{5}[\s-]\d{7}[\s-]\d/);
+  if (cnicM) result.cnic = cnicM[0].replace(/\s/g,'');
+  // Passport
+  const passM = text.match(/[A-Z]{2}\d{7}/i) || text.match(/passport[:\s#]+([A-Z0-9]+)/i);
+  if (passM) result.passport = (passM[1]||passM[0]).toUpperCase();
+  // DOB
+  const dobM = text.match(/(?:dob|born|date of birth)[:\s]+(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})/i) ||
+               text.match(/(\d{1,2}[\/-]\d{1,2}[\/-]\d{4})/);
+  if (dobM) result.dob = dobM[1];
+  // Email
+  const emailM = text.match(/[\w.-]+@[\w.-]+\.\w+/);
+  if (emailM) result.email = emailM[0];
+  // City
+  const cities = ['lahore','karachi','islamabad','rawalpindi','faisalabad','gujranwala','sialkot','multan','peshawar','quetta'];
+  for (const c of cities) { if (t.includes(c)) { result.city = c.charAt(0).toUpperCase()+c.slice(1); break; } }
+  // Visa category
+  if (t.includes('schengen')||t.includes('europe')||t.includes('italy')||t.includes('germany')||t.includes('france')) result.visaCategory = 'schengen-visit';
+  else if (t.includes('uk ')||t.includes('united kingdom')||t.includes('britain')) result.visaCategory = 'uk-visit';
+  else if (t.includes('canada')) result.visaCategory = 'canada-visit';
+  else if (t.includes('usa')||t.includes('america')||t.includes('b1')||t.includes('b2')) result.visaCategory = 'usa-visit';
+  else if (t.includes('dubai')||t.includes('uae')||t.includes('saudi')||t.includes('qatar')||t.includes('gcc')) result.visaCategory = 'gcc-work';
+  else if (t.includes('australia')) result.visaCategory = 'australia-visit';
+  else if (t.includes('turkey')) result.visaCategory = 'turkey-visit';
+  // Occupation
+  const jobs = ['manager','engineer','doctor','teacher','accountant','director','officer','consultant','driver','supervisor','technician','designer','developer','analyst','agent','executive'];
+  for (const j of jobs) { if (t.includes(j)) { result.occupation = j.charAt(0).toUpperCase()+j.slice(1); break; } }
+  // Salary
+  const salM = text.match(/(?:salary|income|earning)[:\s]+(?:pkr|rs\.?)?[\s]?([\d,]+)/i) ||
+               text.match(/([\d,]+)\s*(?:pkr|per month)/i);
+  if (salM) result.salary = salM[1].replace(/,/g,'');
+  // Employer
+  const empM = text.match(/(?:employer|company|working at|works at|employed at)[:\s]+([A-Za-z\s&\.]+?)(?:\.|,|\n|$)/i);
+  if (empM) result.employer = empM[1].trim();
+  // Marital status
+  if (t.includes('married')) result.maritalStatus = 'Married';
+  else if (t.includes('single')||t.includes('unmarried')) result.maritalStatus = 'Single';
+  // Travel history
+  const travelFlags = [];
+  if (t.includes('schengen visa')) travelFlags.push('Schengen');
+  if (t.includes('uk visa')||t.includes('british visa')) travelFlags.push('UK');
+  if (t.includes('us visa')||t.includes('american visa')) travelFlags.push('USA');
+  if (t.includes('no travel')||t.includes('no prior')||t.includes('first time')) result.travelHistory = 'None';
+  else if (travelFlags.length) result.travelHistory = travelFlags.join(', ');
+  return result;
+};
+
+// ─── SCHENGEN COUNTRY DATABASE ────────────────────────────────────────────
+const SCHENGEN_COUNTRIES = {
+  italy:       { flag:'🇮🇹', approvalRate:72, processingDays:15, fee:80, vfsCity:'Lahore/Karachi/Islamabad', strengths:['Tourism-friendly','Large Pakistani diaspora','Accepts employer financials'], concerns:['Requires hotel bookings','Bank statement 6 months'], minBalance:200000 },
+  germany:     { flag:'🇩🇪', approvalRate:58, processingDays:20, fee:80, vfsCity:'Islamabad', strengths:['Strong economic ties','Business visa friendly'], concerns:['Strict financial checks','Requires personal bank statement','Long processing'], minBalance:300000 },
+  spain:       { flag:'🇪🇸', approvalRate:65, processingDays:15, fee:80, vfsCity:'Lahore/Karachi', strengths:['Tourism focused','Moderate requirements'], concerns:['Spanish documents preferred','Travel insurance mandatory'], minBalance:200000 },
+  france:      { flag:'🇫🇷', approvalRate:55, processingDays:15, fee:80, vfsCity:'Islamabad/Karachi', strengths:['Major tourism destination'], concerns:['Very strict financial checks','Personal statement mandatory','High rejection for Pakistanis'], minBalance:300000 },
+  netherlands: { flag:'🇳🇱', approvalRate:60, processingDays:15, fee:80, vfsCity:'Islamabad', strengths:['Efficient processing','Clear requirements'], concerns:['High balance required','Income proof strict'], minBalance:250000 },
+  austria:     { flag:'🇦🇹', approvalRate:68, processingDays:15, fee:80, vfsCity:'Islamabad', strengths:['Reasonable approval rates','Combined with Schengen tour'], concerns:['Moderate requirements'], minBalance:200000 },
+  switzerland: { flag:'🇨🇭', approvalRate:74, processingDays:10, fee:80, vfsCity:'Lahore/Islamabad', strengths:['Higher approval rate','Fast processing','Accepts employer letters'], concerns:['Expensive destination','Higher balance preferred'], minBalance:250000 },
+  iceland:     { flag:'🇮🇸', approvalRate:82, processingDays:10, fee:80, vfsCity:'Islamabad (Denmark embassy)', strengths:['Very high approval rate','Low Pakistani applicant volume','Less scrutiny','Accepts varied financials'], concerns:['Remote destination','Via Denmark embassy'], minBalance:150000 },
+  hungary:     { flag:'🇭🇺', approvalRate:70, processingDays:12, fee:80, vfsCity:'Islamabad', strengths:['Good approval rates','Central Europe access','Requires NTN/tax docs'], concerns:['NTN required','FBR ATL check'], minBalance:180000 },
+  portugal:    { flag:'🇵🇹', approvalRate:71, processingDays:15, fee:80, vfsCity:'Islamabad', strengths:['Good for first-time applicants','Tourism friendly'], concerns:['Limited appointment slots in Pakistan'], minBalance:180000 },
+  greece:      { flag:'🇬🇷', approvalRate:67, processingDays:15, fee:80, vfsCity:'Islamabad', strengths:['Tourism focus','Islands attraction'], concerns:['Peak season backlogs','Hotel proof required'], minBalance:200000 },
+  czech:       { flag:'🇨🇿', approvalRate:66, processingDays:15, fee:80, vfsCity:'Islamabad', strengths:['Moderate requirements','Central location'], concerns:['Less Pakistani applicant data'], minBalance:180000 },
+};
+
+const calcSchengenScore = (country, profile) => {
+  const cd = SCHENGEN_COUNTRIES[country];
+  if (!cd) return 0;
+  let score = cd.approvalRate;
+  const bal = parseInt(profile.bankBalance||0);
+  if (bal >= cd.minBalance*1.5) score += 8;
+  else if (bal >= cd.minBalance) score += 4;
+  else if (bal > 0) score -= 10;
+  if (profile.travelHistory && profile.travelHistory !== 'None') score += 10;
+  if (profile.travelHistory === 'None') score -= 5;
+  if (profile.maritalStatus === 'Married' && profile.familyInPakistan) score += 5;
+  if (profile.employer && profile.occupation) score += 5;
+  if (profile.fbr === 'Yes') score += 5;
+  if (profile.assets) score += 3;
+  return Math.min(96, Math.max(30, Math.round(score)));
+};
+
+// ─── COVER LETTER TEMPLATES ────────────────────────────────────────────────
+const generateCoverLetter = (client, country, purpose='tourism', datesStr='') => {
+  const cn = SCHENGEN_COUNTRIES[country];
+  const countryName = country.charAt(0).toUpperCase()+country.slice(1);
+  const today = new Date().toLocaleDateString('en-PK',{day:'2-digit',month:'long',year:'numeric'});
+  return `Date: ${today}
+
+The Visa Officer
+${countryName} Embassy / Consulate
+Islamabad, Pakistan
+
+Subject: Application for ${countryName} Schengen Visa — Tourism Purpose
+
+Respected Sir/Madam,
+
+I, ${client.name||'[Applicant Name]'}, holder of Pakistani Passport No. ${client.passport||'[Passport Number]'}, respectfully submit this application for a Schengen tourist visa to ${countryName}${datesStr ? ` for the period ${datesStr}` : ''}.
+
+PERSONAL PROFILE:
+I am employed as ${client.occupation||'[Occupation]'} at ${client.employer||'[Employer]'}, ${client.city||'Lahore'}, Pakistan. I have been in this position for ${client.yearsEmployed||'several'} years and earn a monthly salary of PKR ${client.salary ? parseInt(client.salary).toLocaleString() : '[Amount]'}.
+
+PURPOSE OF VISIT:
+The purpose of my visit is purely tourism. I intend to explore the cultural heritage, historical landmarks, and natural beauty of ${countryName}. This is a deeply cherished personal aspiration and I have planned and saved specifically for this trip.
+
+FINANCIAL STANDING:
+I am financially self-sufficient and capable of meeting all expenses during my stay in ${countryName}. My financial documents, including ${client.salary ? 'salary slips, employer letter, and bank statement' : 'bank statement and financial evidence'}, are enclosed to demonstrate my economic stability.
+
+STRONG TIES TO PAKISTAN:
+I have strong ties to Pakistan that guarantee my return within the authorised visa period:
+• ${client.maritalStatus === 'Married' ? 'My spouse and children reside in Pakistan' : 'My immediate family resides in Pakistan'}
+• I am in regular, stable employment with responsibilities requiring my return
+• I own property and assets in Pakistan
+• My entire social and professional network is based in Pakistan
+
+TRAVEL HISTORY:
+${client.travelHistory && client.travelHistory !== 'None' ? `I have previously held/obtained ${client.travelHistory} visa(s), demonstrating my compliance with immigration rules and my history of timely return.` : 'While this is my first Schengen visa application, I have a clean immigration record and full respect for all visa conditions.'}
+
+I sincerely assure the Consular Officer that I will strictly abide by the visa conditions, will not overstay, and will return to Pakistan upon completion of my trip. All supporting documents are enclosed for your kind consideration.
+
+I respectfully request a favourable decision on my application.
+
+Yours sincerely,
+
+${client.name||'[Applicant Name]'}
+CNIC: ${client.cnic||'[CNIC Number]'}
+Phone: ${client.phone||'[Phone Number]'}
+Email: ${client.email||'[Email]'}
+${client.city||'Lahore'}, Pakistan`;
+};
+
+// ─── SMART INTAKE VIEW ─────────────────────────────────────────────────────
+const SmartIntakeView = ({ currentUser, onClientCreated }) => {
+  const [text, setText] = useState('');
+  const [parsed, setParsed] = useState(null);
+  const [form, setForm] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [step, setStep] = useState(1); // 1=paste, 2=review, 3=done
+
+  const handleParse = () => {
+    const result = parseClientText(text);
+    setParsed(result);
+    setForm({
+      name: result.name||'', phone: result.phone||'', email: result.email||'',
+      cnic: result.cnic||'', passport: result.passport||'', dob: result.dob||'',
+      city: result.city||'', occupation: result.occupation||'', employer: result.employer||'',
+      salary: result.salary||'', maritalStatus: result.maritalStatus||'',
+      travelHistory: result.travelHistory||'', visaCategory: result.visaCategory||'schengen-visit',
+    });
+    setStep(2);
+  };
+
+  const handleSave = async () => {
+    if (!form.name) { alert('Please enter client name.'); return; }
+    setSaving(true);
+    try {
+      const id = genId('cl');
+      await setDoc(doc(db, DB_PATH('clients'), id), {
+        id, ...form, status:'new', source:'smart-intake',
+        createdBy: currentUser.name, createdAt: ts(), deleted: false,
+        intake_raw: text.slice(0,500),
+      });
+      await logActivity('client_created', `Smart Intake: ${form.name}`, currentUser);
+      setSaved(true); setStep(3);
+      if (onClientCreated) onClientCreated(id);
+    } catch(e) { alert('Save failed: '+e.message); }
+    setSaving(false);
+  };
+
+  const fields = [
+    ['name','Full Name','text'],['phone','Phone','text'],['email','Email','email'],
+    ['cnic','CNIC','text'],['passport','Passport No','text'],['dob','Date of Birth','text'],
+    ['city','City','text'],['occupation','Occupation','text'],['employer','Employer','text'],
+    ['salary','Monthly Salary (PKR)','number'],['maritalStatus','Marital Status','text'],
+    ['travelHistory','Travel History','text'],
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-gradient-to-r from-[#1a1a2e] to-[#16213e] rounded-2xl p-6 text-white">
+        <div className="flex items-center gap-3 mb-2">
+          <div className="bg-amber-500 p-2 rounded-xl"><Zap size={20}/></div>
+          <h2 className="text-xl font-black">🧠 Smart Client Intake</h2>
+        </div>
+        <p className="text-white/60 text-sm">Paste client info in ANY format — WhatsApp message, text, notes — system auto-extracts all fields. 100% Free, No API needed.</p>
+      </div>
+
+      {/* Step indicators */}
+      <div className="flex gap-4">
+        {[['1','Paste Info'],['2','Review & Edit'],['3','Saved ✅']].map(([n,l])=>(
+          <div key={n} className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold ${step>=parseInt(n)?'bg-amber-600 text-white':'bg-slate-100 text-slate-400'}`}>
+            <span className="w-5 h-5 rounded-full bg-white/20 flex items-center justify-center text-xs">{n}</span>{l}
+          </div>
+        ))}
+      </div>
+
+      {step === 1 && (
+        <Card>
+          <p className="text-sm font-bold text-slate-700 mb-3">📋 Paste client information below (any format):</p>
+          <div className="bg-slate-50 rounded-xl p-3 mb-3 text-xs text-slate-500 space-y-1">
+            <p className="font-bold text-slate-600">✅ Examples of what you can paste:</p>
+            <p>• "Muhammad Aqib, CNIC: 34101-8611118-9, Passport YP1331181, Marketing Manager, PKR 300,000/month, Gujranwala, wants Schengen visa"</p>
+            <p>• WhatsApp message forwarded from client with their details</p>
+            <p>• Any text with name, phone, CNIC, passport, job, salary info</p>
+          </div>
+          <textarea
+            value={text} onChange={e=>setText(e.target.value)} rows={8}
+            placeholder="Paste client info here in any format..."
+            className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-white outline-none focus:ring-2 focus:ring-amber-400/30 focus:border-amber-400 text-sm resize-none"
+          />
+          <button onClick={handleParse} disabled={!text.trim()}
+            className="mt-4 w-full py-3 bg-amber-600 hover:bg-amber-500 text-white font-black rounded-xl flex items-center justify-center gap-2 disabled:opacity-50 transition">
+            <Zap size={16}/> Extract Client Data
+          </button>
+        </Card>
+      )}
+
+      {step === 2 && parsed && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <p className="font-black text-slate-800">✅ Extracted — Review & Edit Fields</p>
+            <button onClick={()=>setStep(1)} className="text-xs text-slate-400 hover:text-slate-600">← Re-paste</button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+            {fields.map(([key,label,type])=>(
+              <div key={key}>
+                <label className="block text-xs font-bold text-slate-500 mb-1">
+                  {label} {parsed[key] ? <span className="text-green-600 ml-1">✅ Auto-filled</span> : <span className="text-slate-400 ml-1">✏️ Enter manually</span>}
+                </label>
+                <input type={type} value={form[key]||''} onChange={e=>setForm(f=>({...f,[key]:e.target.value}))}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-400/20 focus:border-amber-400 text-sm"/>
+              </div>
+            ))}
+            <div>
+              <label className="block text-xs font-bold text-slate-500 mb-1">Visa Category</label>
+              <select value={form.visaCategory||'schengen-visit'} onChange={e=>setForm(f=>({...f,visaCategory:e.target.value}))}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-400/20 text-sm">
+                {VISA_CATEGORIES.map(v=><option key={v.id} value={v.id}>{v.icon} {v.label}</option>)}
+              </select>
+            </div>
+          </div>
+          <button onClick={handleSave} disabled={saving||!form.name}
+            className="w-full py-3 bg-[#1a1a2e] hover:bg-[#16213e] text-white font-black rounded-xl flex items-center justify-center gap-2 disabled:opacity-50 transition">
+            {saving?<Spinner/>:<><CheckCircle2 size={16}/> Save Client to CRM</>}
+          </button>
+        </Card>
+      )}
+
+      {step === 3 && (
+        <Card className="text-center py-10">
+          <div className="text-5xl mb-4">🎉</div>
+          <h3 className="text-2xl font-black text-slate-800 mb-2">Client Saved!</h3>
+          <p className="text-slate-500 mb-6">{form.name} has been added to your CRM successfully.</p>
+          <div className="flex gap-3 justify-center">
+            <button onClick={()=>{setStep(1);setText('');setParsed(null);setForm({});setSaved(false);}}
+              className="px-6 py-2 bg-amber-600 text-white font-bold rounded-xl hover:bg-amber-500">
+              + Add Another Client
+            </button>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+};
+
+// ─── SCHENGEN STRATEGY ENGINE ──────────────────────────────────────────────
+const SchengenEngineView = ({ currentUser }) => {
+  const [profile, setProfile] = useState({
+    name:'', bankBalance:'', salary:'', travelHistory:'None',
+    maritalStatus:'', familyInPakistan:true, employer:'', occupation:'',
+    fbr:'No', assets:'', purpose:'Tourism', targetCountries:[], duration:'7',
+  });
+  const [results, setResults] = useState(null);
+  const [coverLetter, setCoverLetter] = useState('');
+  const [activeTab, setActiveTab] = useState('profile');
+  const allCountries = Object.keys(SCHENGEN_COUNTRIES);
+
+  const toggleCountry = (c) => {
+    setProfile(p=>({...p, targetCountries: p.targetCountries.includes(c) ? p.targetCountries.filter(x=>x!==c) : [...p.targetCountries,c]}));
+  };
+
+  const runAnalysis = () => {
+    const targets = profile.targetCountries.length ? profile.targetCountries : ['italy','iceland','portugal','switzerland'];
+    const scored = targets.map(c=>({ country:c, ...SCHENGEN_COUNTRIES[c], score: calcSchengenScore(c, profile) }))
+      .sort((a,b)=>b.score-a.score);
+    setResults(scored);
+    setActiveTab('results');
+  };
+
+  const getScoreColor = (s) => s>=80?'text-green-600':s>=65?'text-amber-600':'text-red-500';
+  const getScoreBg = (s) => s>=80?'bg-green-50 border-green-200':s>=65?'bg-amber-50 border-amber-200':'bg-red-50 border-red-200';
+
+  const CHECKLIST = {
+    'schengen-visit': ['Valid Passport (6+ months validity, 2 blank pages)','Passport-size photos (35x45mm, white background)','Visa application form (filled & signed)','Travel insurance (€30,000 coverage)','Flight itinerary (round trip)','Hotel bookings / accommodation proof','Bank statement (6 months)','Salary slips (3 months)','Employer NOC / Leave approval letter','Employment certificate','CNIC copy (front & back)','NTN certificate (FBR filer)','Property documents / assets proof','Family registration certificate (if married)','Invitation letter (if visiting family/friends)','Cover letter explaining purpose of visit'],
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-gradient-to-r from-[#0f3460] to-[#16213e] rounded-2xl p-6 text-white">
+        <div className="flex items-center gap-3 mb-2">
+          <div className="bg-amber-500 p-2 rounded-xl"><Globe size={20}/></div>
+          <h2 className="text-xl font-black">🇪🇺 Schengen Strategy Engine</h2>
+        </div>
+        <p className="text-white/60 text-sm">Enter client profile → Get country rankings, success probability scores, document checklist & cover letter. 100% Free.</p>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-2 bg-slate-100 p-1 rounded-2xl">
+        {[['profile','📋 Client Profile'],['results','📊 Analysis Results'],['checklist','✅ Document Checklist'],['letter','📝 Cover Letter']].map(([id,label])=>(
+          <button key={id} onClick={()=>setActiveTab(id)}
+            className={`flex-1 py-2 text-xs font-black rounded-xl transition ${activeTab===id?'bg-white text-slate-800 shadow':'text-slate-500 hover:text-slate-700'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'profile' && (
+        <Card>
+          <p className="font-black text-slate-800 mb-4">Enter Client Profile for Analysis</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+            {[['name','Client Name'],['occupation','Occupation'],['employer','Employer'],['salary','Monthly Salary (PKR)'],['bankBalance','Bank Balance (PKR)'],['duration','Trip Duration (Days)']].map(([k,l])=>(
+              <div key={k}>
+                <label className="block text-xs font-bold text-slate-500 mb-1">{l}</label>
+                <input value={profile[k]||''} onChange={e=>setProfile(p=>({...p,[k]:e.target.value}))}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-400/20 text-sm"/>
+              </div>
+            ))}
+            <div>
+              <label className="block text-xs font-bold text-slate-500 mb-1">Travel History</label>
+              <select value={profile.travelHistory} onChange={e=>setProfile(p=>({...p,travelHistory:e.target.value}))}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none text-sm">
+                {['None','Schengen','UK','USA','UAE/GCC','Multiple Countries'].map(v=><option key={v}>{v}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 mb-1">Marital Status</label>
+              <select value={profile.maritalStatus} onChange={e=>setProfile(p=>({...p,maritalStatus:e.target.value}))}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none text-sm">
+                {['Married','Single','Divorced','Widowed'].map(v=><option key={v}>{v}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 mb-1">FBR/NTN Tax Filer?</label>
+              <select value={profile.fbr} onChange={e=>setProfile(p=>({...p,fbr:e.target.value}))}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none text-sm">
+                <option>Yes</option><option>No</option>
+              </select>
+            </div>
+          </div>
+          <div className="mb-4">
+            <label className="block text-xs font-bold text-slate-500 mb-2">🌍 Target Countries (select all that apply, or leave blank for auto-recommendation)</label>
+            <div className="flex flex-wrap gap-2">
+              {allCountries.map(c=>(
+                <button key={c} onClick={()=>toggleCountry(c)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${profile.targetCountries.includes(c)?'bg-amber-600 text-white border-amber-600':'bg-white text-slate-600 border-slate-200 hover:border-amber-400'}`}>
+                  {SCHENGEN_COUNTRIES[c].flag} {c.charAt(0).toUpperCase()+c.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <button onClick={runAnalysis}
+            className="w-full py-3 bg-gradient-to-r from-[#1a1a2e] to-[#0f3460] text-white font-black rounded-xl flex items-center justify-center gap-2 hover:opacity-90 transition">
+            <TrendingUp size={16}/> Run Schengen Analysis
+          </button>
+        </Card>
+      )}
+
+      {activeTab === 'results' && (
+        <div className="space-y-4">
+          {!results ? (
+            <Card className="text-center py-10">
+              <Globe size={40} className="text-slate-300 mx-auto mb-3"/>
+              <p className="text-slate-500">Complete the client profile and run analysis first.</p>
+              <button onClick={()=>setActiveTab('profile')} className="mt-4 px-6 py-2 bg-amber-600 text-white font-bold rounded-xl">Fill Profile →</button>
+            </Card>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {results.slice(0,3).map((r,i)=>(
+                  <div key={r.country} className={`p-4 rounded-2xl border-2 ${i===0?'border-amber-400 bg-amber-50':getScoreBg(r.score)}`}>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-2xl">{r.flag}</span>
+                      {i===0&&<span className="text-xs font-black bg-amber-600 text-white px-2 py-0.5 rounded-lg">🏆 BEST</span>}
+                    </div>
+                    <h3 className="font-black text-slate-800 text-lg capitalize">{r.country}</h3>
+                    <div className={`text-3xl font-black ${getScoreColor(r.score)} my-2`}>{r.score}%</div>
+                    <p className="text-xs text-slate-500">Success Probability</p>
+                    <div className="mt-3 space-y-1">
+                      <div className="flex justify-between text-xs"><span className="text-slate-500">Embassy Rate</span><span className="font-bold">{r.approvalRate}%</span></div>
+                      <div className="flex justify-between text-xs"><span className="text-slate-500">Processing</span><span className="font-bold">{r.processingDays} days</span></div>
+                      <div className="flex justify-between text-xs"><span className="text-slate-500">Min Balance</span><span className="font-bold">PKR {r.minBalance.toLocaleString()}</span></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {results.map(r=>(
+                <Card key={r.country} className="!p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">{r.flag}</span>
+                      <span className="font-black text-slate-800 capitalize">{r.country}</span>
+                    </div>
+                    <span className={`text-2xl font-black ${getScoreColor(r.score)}`}>{r.score}%</span>
+                  </div>
+                  <div className="w-full bg-slate-100 rounded-full h-2 mb-3">
+                    <div className={`h-2 rounded-full ${r.score>=80?'bg-green-500':r.score>=65?'bg-amber-500':'bg-red-500'}`} style={{width:r.score+'%'}}/>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div><p className="text-slate-400">✅ Strengths</p>{r.strengths.map((s,i)=><p key={i} className="text-green-700 font-medium">• {s}</p>)}</div>
+                    <div><p className="text-slate-400">⚠️ Watch Points</p>{r.concerns.map((c,i)=><p key={i} className="text-amber-700 font-medium">• {c}</p>)}</div>
+                  </div>
+                  <div className="mt-3 pt-3 border-t flex gap-2">
+                    <button onClick={()=>{setCoverLetter(generateCoverLetter(profile,r.country));setActiveTab('letter');}}
+                      className="flex-1 py-1.5 bg-[#1a1a2e] text-white text-xs font-bold rounded-xl hover:bg-[#16213e]">
+                      📝 Generate Cover Letter
+                    </button>
+                    <button onClick={()=>setActiveTab('checklist')}
+                      className="flex-1 py-1.5 bg-slate-100 text-slate-700 text-xs font-bold rounded-xl hover:bg-slate-200">
+                      ✅ View Checklist
+                    </button>
+                  </div>
+                </Card>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'checklist' && (
+        <Card>
+          <p className="font-black text-slate-800 mb-4">✅ Schengen Visa Document Checklist</p>
+          <div className="space-y-2">
+            {CHECKLIST['schengen-visit'].map((item,i)=>(
+              <label key={i} className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl hover:bg-amber-50 cursor-pointer transition group">
+                <input type="checkbox" className="mt-0.5 accent-amber-600"/>
+                <span className="text-sm text-slate-700 group-hover:text-slate-900">{item}</span>
+              </label>
+            ))}
+          </div>
+          <div className="mt-4 p-4 bg-amber-50 rounded-xl border border-amber-100">
+            <p className="text-xs font-black text-amber-700">🇵🇰 Pakistan-Specific Requirements</p>
+            <div className="mt-2 space-y-1 text-xs text-amber-800">
+              <p>• NTN certificate from FBR (fbr.gov.pk) — mandatory for most embassies</p>
+              <p>• FBR ATL (Active Taxpayer List) verification print</p>
+              <p>• Utility bills (electricity/gas) showing home address</p>
+              <p>• VFS appointment confirmation (book via vfsglobal.com)</p>
+              <p>• Travel insurance must be purchased from approved provider</p>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {activeTab === 'letter' && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <p className="font-black text-slate-800">📝 Generated Cover Letter</p>
+            <button onClick={()=>navigator.clipboard.writeText(coverLetter).then(()=>alert('Cover letter copied!'))}
+              className="px-3 py-1.5 bg-amber-600 text-white text-xs font-bold rounded-xl flex items-center gap-1">
+              <Copy size={12}/> Copy All
+            </button>
+          </div>
+          {!coverLetter ? (
+            <div className="text-center py-8">
+              <p className="text-slate-500 text-sm">Go to Results tab and click "Generate Cover Letter" for a country.</p>
+              <button onClick={()=>setActiveTab('results')} className="mt-3 px-4 py-2 bg-amber-600 text-white text-xs font-bold rounded-xl">View Results →</button>
+            </div>
+          ) : (
+            <textarea value={coverLetter} onChange={e=>setCoverLetter(e.target.value)} rows={28}
+              className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-400/20 text-sm font-mono resize-none"/>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+};
+
+// ─── DOCUMENT UPLOAD VIEW ──────────────────────────────────────────────────
+const DocUploadView = ({ currentUser, isAdmin }) => {
+  const [clients, setClients] = useState([]);
+  const [selClient, setSelClient] = useState('');
+  const [file, setFile] = useState(null);
+  const [docType, setDocType] = useState('Passport');
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [uploaded, setUploaded] = useState([]);
+  const [loadingDocs, setLoadingDocs] = useState(false);
+
+  useEffect(()=>{
+    if(!db) return;
+    getDocs(query(collection(db, DB_PATH('clients')), where('deleted','==',false), orderBy('createdAt','desc')))
+      .then(s=>setClients(s.docs.map(d=>({id:d.id,...d.data()}))));
+  },[]);
+
+  useEffect(()=>{
+    if(!selClient||!db) return;
+    setLoadingDocs(true);
+    getDocs(collection(db, SUB_PATH('clients',selClient,'documents')))
+      .then(s=>{setUploaded(s.docs.map(d=>({id:d.id,...d.data()})));setLoadingDocs(false);});
+  },[selClient]);
+
+  const handleUpload = async () => {
+    if(!file||!selClient) { alert('Select client and file first.'); return; }
+    if(!storage) { alert('Firebase Storage not configured.'); return; }
+    setUploading(true); setProgress(0);
+    try {
+      const path = `clients/${selClient}/${docType}/${Date.now()}_${file.name}`;
+      const ref = storageRef(storage, path);
+      const task = uploadBytesResumable(ref, file);
+      task.on('state_changed', snap=>setProgress(Math.round(snap.bytesTransferred/snap.totalBytes*100)));
+      await new Promise((res,rej)=>task.on('state_changed',null,rej,res));
+      const url = await getDownloadURL(ref);
+      const docId = genId('doc');
+      const docData = { id:docId, name:file.name, type:docType, url, path, size:file.size, uploadedBy:currentUser.name, uploadedAt:ts(), clientId:selClient };
+      await setDoc(doc(db, SUB_PATH('clients',selClient,'documents'), docId), docData);
+      await logActivity('doc_uploaded', `Doc uploaded: ${file.name} for client`, currentUser);
+      setUploaded(p=>[docData,...p]);
+      setFile(null); setProgress(0);
+      alert('✅ Document uploaded successfully!');
+    } catch(e) { alert('Upload failed: '+e.message); }
+    setUploading(false);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-gradient-to-r from-[#1a1a2e] to-[#0f3460] rounded-2xl p-6 text-white">
+        <div className="flex items-center gap-3 mb-2">
+          <div className="bg-amber-500 p-2 rounded-xl"><Cloud size={20}/></div>
+          <h2 className="text-xl font-black">☁️ Document Upload to Firebase</h2>
+        </div>
+        <p className="text-white/60 text-sm">Upload client documents directly to Firebase Cloud Storage. Secure, permanent, accessible from anywhere.</p>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+        <Card>
+          <p className="font-black text-slate-800 mb-4">Upload New Document</p>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-500 mb-1">Select Client</label>
+              <select value={selClient} onChange={e=>setSelClient(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none text-sm">
+                <option value="">-- Select Client --</option>
+                {clients.map(c=><option key={c.id} value={c.id}>{c.name} {c.city?`(${c.city})`:''}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 mb-1">Document Type</label>
+              <select value={docType} onChange={e=>setDocType(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none text-sm">
+                {DOCUMENT_TYPES.map(t=><option key={t}>{t}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 mb-1">Select File</label>
+              <input type="file" onChange={e=>setFile(e.target.files[0])} accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                className="w-full text-sm text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:font-bold file:bg-amber-50 file:text-amber-600 hover:file:bg-amber-100"/>
+            </div>
+            {file && <p className="text-xs text-slate-500">📄 {file.name} ({fmtFileSize(file.size)})</p>}
+            {uploading && (
+              <div>
+                <div className="w-full bg-slate-100 rounded-full h-2">
+                  <div className="h-2 bg-amber-500 rounded-full transition-all" style={{width:progress+'%'}}/>
+                </div>
+                <p className="text-xs text-amber-600 mt-1 font-bold">Uploading... {progress}%</p>
+              </div>
+            )}
+            <button onClick={handleUpload} disabled={uploading||!file||!selClient}
+              className="w-full py-3 bg-amber-600 hover:bg-amber-500 text-white font-black rounded-xl flex items-center justify-center gap-2 disabled:opacity-50 transition">
+              {uploading?<Spinner/>:<><Upload size={16}/> Upload to Firebase</>}
+            </button>
+          </div>
+        </Card>
+        <Card>
+          <p className="font-black text-slate-800 mb-4">
+            {selClient ? `📁 Documents for ${clients.find(c=>c.id===selClient)?.name||'Client'}` : '📁 Select a client to view documents'}
+          </p>
+          {loadingDocs ? <div className="flex justify-center py-6"><Spinner size={6}/></div> :
+          uploaded.length === 0 ? (
+            <div className="text-center py-8 text-slate-400">
+              <Folder size={32} className="mx-auto mb-2 opacity-40"/>
+              <p className="text-sm">No documents uploaded yet</p>
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {uploaded.map(d=>(
+                <div key={d.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl hover:bg-slate-100">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FileText size={16} className="text-amber-600 flex-shrink-0"/>
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-slate-700 truncate">{d.name}</p>
+                      <p className="text-[10px] text-slate-400">{d.type} • {fmtFileSize(d.size||0)}</p>
+                    </div>
+                  </div>
+                  <a href={d.url} target="_blank" rel="noopener noreferrer"
+                    className="flex-shrink-0 ml-2 px-2 py-1 bg-blue-50 text-blue-600 text-xs font-bold rounded-lg hover:bg-blue-100">
+                    View
+                  </a>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+};
