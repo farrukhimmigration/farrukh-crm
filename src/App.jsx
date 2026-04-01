@@ -824,7 +824,7 @@ PREPARED BY: ${FIRM.name} | ${FIRM.phone}
 // 10. CLIENT DETAIL VIEW
 // ══════════════════════════════════════════════════════════════════════════
 
-const ClientDetailView = ({ clientId, currentUser, isAdmin, onBack }) => {
+const ClientDetailView = ({ clientId, currentUser, isAdmin, onBack, staffList = [] }) => {
   const [client,      setClient]      = useState(null);
   const [cases,       setCases]       = useState([]);
   const [documents,   setDocuments]   = useState([]);
@@ -2422,6 +2422,7 @@ export default function App() {
       return (
         <ClientDetailView
           clientId={selectedClientId} currentUser={currentUser} isAdmin={isAdmin}
+          staffList={staffList}
           onBack={() => { setView('clients'); setSelectedClientId(null); }}
         />
       );
@@ -2429,7 +2430,7 @@ export default function App() {
     switch(view) {
       case 'dashboard':  return <DashboardView currentUser={currentUser} isAdmin={isAdmin} onSelectClient={id => { setSelectedClientId(id); setView('client-detail'); }}/>;
       case 'clients':    return <ClientsView   currentUser={currentUser} isAdmin={isAdmin} onSelectClient={id => { setSelectedClientId(id); setView('client-detail'); }}/>;
-      case 'intake':     return <SmartIntakeView currentUser={currentUser} onClientCreated={id=>{ setSelectedClientId(id); setView('client-detail'); }}/>;
+      case 'intake':     return <SmartIntakeView currentUser={currentUser} onClientCreated={id=>{ setSelectedClientId(id); setView('client-detail'); }} staffList={staffList}/>;
       case 'schengen':   return <SchengenEngineView currentUser={currentUser}/>;
       case 'docupload':  return <DocUploadView currentUser={currentUser} isAdmin={isAdmin}/>;
       case 'staff':      return isAdmin ? <StaffView currentUser={currentUser}/> : null;
