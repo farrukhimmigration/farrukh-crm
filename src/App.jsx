@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════
-// FARRUKH CONSULTANCY — FULL IMMIGRATION MANAGEMENT SYSTEM v2.1
+// FARRUKH CONSULTANCY — FULL IMMIGRATION MANAGEMENT SYSTEM v2.2
 // Fixed: Firebase Vite env vars, dashboard stats, permanent delete,
 //        staff doc upload, WhatsApp generator, archive filter,
 //        note deletion, report visibility, force-logout, and more.
