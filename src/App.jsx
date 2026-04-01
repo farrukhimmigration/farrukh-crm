@@ -840,6 +840,8 @@ const ClientDetailView = ({ clientId, currentUser, isAdmin, onBack }) => {
   const [showWA,      setShowWA]      = useState(false);
   const [newNote,     setNewNote]     = useState('');
   const [noteType,    setNoteType]    = useState('progress');
+  const [transferCaseObj,  setTransferCaseObj]  = useState(null);
+  const [transferForm,     setTransferForm]     = useState({ staffName:'', staffId:'', department:'', note:'' });
   const [selectedCase, setSelectedCase] = useState(null);
   const [saving,      setSaving]      = useState(false);
   const [newCase,     setNewCase]     = useState({ visaType:'', notes:'', priority:'normal', fee:'' });
@@ -2997,6 +2999,28 @@ const SchengenEngineView = ({ currentUser }) => {
   );
 };
 
+// ─── GOOGLE DRIVE SYNC ────────────────────────────────────────────────────
+const DRIVE_URL = import.meta.env?.VITE_GOOGLE_SCRIPT_URL || '';
+
+const syncToDrive = async (file, clientName, clientId, docType) => {
+  if (!DRIVE_URL) return null;
+  try {
+    const reader = new FileReader();
+    const base64 = await new Promise((res, rej) => {
+      reader.onload = e => res(e.target.result.split(',')[1]);
+      reader.onerror = () => rej(new Error('Read failed'));
+      reader.readAsDataURL(file);
+    });
+    const resp = await fetch(DRIVE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action:'uploadFile', fileName:file.name, mimeType:file.type, base64Data:base64, clientName, clientId, docType }),
+    });
+    const data = await resp.json();
+    return data.success ? { driveUrl:data.fileUrl, driveFolderUrl:data.folderUrl, driveId:data.fileId } : null;
+  } catch { return null; }
+};
+
 // ─── DOCUMENT UPLOAD VIEW ──────────────────────────────────────────────────
 const DocUploadView = ({ currentUser, isAdmin }) => {
   const [clients, setClients] = useState([]);
@@ -3035,14 +3059,23 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
       task.on('state_changed', snap => setProgress(Math.round(snap.bytesTransferred/snap.totalBytes*100)));
       await new Promise((res,rej) => task.on('state_changed', null, rej, res));
       const url = await getDownloadURL(sRef);
+      const clientObj = clients.find(c=>c.id===selClient);
+      const clientName = clientObj?.name || 'Unknown';
+      // Sync to Google Drive in background
+      let driveData = {};
+      if (DRIVE_URL) {
+        setUploadStatus('🔄 Syncing to Google Drive...');
+        const driveResult = await syncToDrive(file, clientName, selClient, docType);
+        if (driveResult) driveData = driveResult;
+      }
       const docId = genId('doc');
-      const docData = { id:docId, name:file.name, type:docType, url, path, size:file.size, uploadedBy:currentUser.name, uploadedAt:ts(), clientId:selClient, storage:'firebase' };
+      const docData = { id:docId, name:file.name, type:docType, url, path, size:file.size, uploadedBy:currentUser.name, uploadedAt:ts(), clientId:selClient, storage: DRIVE_URL ? 'firebase+drive' : 'firebase', ...driveData };
       await setDoc(doc(db, SUB_PATH('clients',selClient,'documents'), docId), docData);
       await logActivity('doc_uploaded', `Doc uploaded: ${file.name} (${fmtFileSize(file.size)})`, currentUser);
       setUploaded(p=>[docData,...p]);
       setFile(null); setProgress(0);
-      setUploadStatus('✅ Uploaded successfully!');
-      setTimeout(()=>setUploadStatus(''), 3000);
+      setUploadStatus(driveData.driveUrl ? '✅ Saved to Firebase + Google Drive!' : '✅ Saved to Firebase!');
+      setTimeout(()=>setUploadStatus(''), 4000);
     } catch(e) { alert('Upload failed: '+e.message); setUploadStatus(''); }
     setUploading(false);
   };
@@ -3089,8 +3122,8 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
                 <p className="text-xs text-amber-600 font-bold">{uploadStatus || `Uploading... ${progress}%`}</p>
               </div>
             )}
-            <div className="p-2 bg-blue-50 border border-blue-100 rounded-xl text-xs text-blue-700">
-              🔥 Firebase Storage — No file size limit. Bank statements, PDFs, scans all supported.
+            <div className={`p-2 rounded-xl text-xs font-bold border ${DRIVE_URL ? 'bg-green-50 border-green-100 text-green-700' : 'bg-blue-50 border-blue-100 text-blue-700'}`}>
+              {DRIVE_URL ? '✅ Firebase + Google Drive sync active — files backed up to topnotchconsultancy@gmail.com' : '🔥 Firebase Storage only — files saved securely'}
             </div>
             <button onClick={handleUpload} disabled={uploading||!file||!selClient}
               className="w-full py-3 bg-amber-600 hover:bg-amber-500 text-white font-black rounded-xl flex items-center justify-center gap-2 disabled:opacity-50 transition">
@@ -3120,12 +3153,10 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
                       <p className="text-[10px] text-slate-400">{d.type} • {fmtFileSize(d.size||0)} • {fmtDate(d.uploadedAt)}</p>
                     </div>
                   </div>
-                  {d.url && (
-                    <a href={d.url} target="_blank" rel="noopener noreferrer"
-                      className="flex-shrink-0 ml-2 px-3 py-1 bg-amber-50 text-amber-600 text-xs font-bold rounded-lg hover:bg-amber-100">
-                      View
-                    </a>
-                  )}
+                  <div className="flex gap-1 flex-shrink-0 ml-2">
+                    {d.url && <a href={d.url} target="_blank" rel="noopener noreferrer" className="px-2 py-1 bg-orange-50 text-orange-600 text-xs font-bold rounded-lg hover:bg-orange-100">🔥</a>}
+                    {d.driveUrl && <a href={d.driveUrl} target="_blank" rel="noopener noreferrer" className="px-2 py-1 bg-green-50 text-green-600 text-xs font-bold rounded-lg hover:bg-green-100">📁</a>}
+                  </div>
                 </div>
               ))}
             </div>
