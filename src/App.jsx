@@ -2808,7 +2808,7 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
               <label className="block text-xs font-bold text-slate-500 mb-1">Document Type</label>
               <select value={docType} onChange={e=>setDocType(e.target.value)}
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none text-sm">
-                {DOCUMENT_TYPES.map(t=><option key={t}>{t}</option>)}
+                {DOC_TYPES.map(t=><option key={t}>{t}</option>)}
               </select>
             </div>
             <div>
