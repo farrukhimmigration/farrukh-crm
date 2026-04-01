@@ -839,6 +839,7 @@ const ClientDetailView = ({ clientId, currentUser, isAdmin, onBack }) => {
   const [showReport,  setShowReport]  = useState(false);
   const [showWA,      setShowWA]      = useState(false);
   const [newNote,     setNewNote]     = useState('');
+  const [noteType,    setNoteType]    = useState('progress');
   const [selectedCase, setSelectedCase] = useState(null);
   const [saving,      setSaving]      = useState(false);
   const [newCase,     setNewCase]     = useState({ visaType:'', notes:'', priority:'normal', fee:'' });
@@ -884,12 +885,46 @@ const ClientDetailView = ({ clientId, currentUser, isAdmin, onBack }) => {
     const id = genId('case');
     await setDoc(doc(db, SUB_PATH('clients', clientId, 'cases'), id), {
       id, clientId, ...newCase, status:'new',
+      assignedTo: newCase.assignedTo || currentUser.name,
+      assignedStaff: newCase.assignedStaff || currentUser.id || '',
+      department: newCase.department || 'Marketing',
       createdBy: currentUser.name, createdAt: ts(), updatedAt: ts(),
       history: [{ status:'new', note:'Case created', by:currentUser.name, at:ts() }],
+      transferLog: [],
     });
     await logActivity('case_created', `Created ${newCase.visaType} case for ${client.name}`, currentUser);
-    setNewCase({ visaType:'', notes:'', priority:'normal', fee:'' });
+    setNewCase({ visaType:'', notes:'', priority:'normal', fee:'', assignedTo:'', department:'Marketing' });
     setShowAddCase(false);
+  };
+
+  // Transfer case to different staff/department
+  const transferCase = async (caseId, toStaffName, toStaffId, toDept, transferNote) => {
+    const c = cases.find(x => x.id === caseId);
+    if (!c) return;
+    const transferEntry = {
+      from: c.assignedTo || 'Unassigned',
+      fromDept: c.department || '',
+      to: toStaffName,
+      toDept,
+      note: transferNote,
+      by: currentUser.name,
+      at: ts(),
+    };
+    const history = [...(c.history||[]), {
+      status: c.status,
+      note: `Case transferred from ${c.assignedTo||'Unassigned'} (${c.department||''}) to ${toStaffName} (${toDept}). ${transferNote}`,
+      by: currentUser.name, at: ts(),
+    }];
+    await updateDoc(doc(db, SUB_PATH('clients', clientId, 'cases'), caseId), {
+      assignedTo: toStaffName,
+      assignedStaff: toStaffId,
+      department: toDept,
+      updatedAt: ts(),
+      updatedBy: currentUser.name,
+      history,
+      transferLog: [...(c.transferLog||[]), transferEntry],
+    });
+    await logActivity('case_transferred', `Case transferred to ${toStaffName} (${toDept}) for ${client.name}`, currentUser);
   };
 
   const updateCaseStatus = async (caseId, status, note='') => {
@@ -907,7 +942,7 @@ const ClientDetailView = ({ clientId, currentUser, isAdmin, onBack }) => {
     if (!newNote.trim()) return;
     const id = genId('note');
     await setDoc(doc(db, SUB_PATH('clients', clientId, 'notes'), id), {
-      id, content: newNote, addedBy: currentUser.name, createdAt: ts(),
+      id, content: newNote, noteType: noteType||'progress', addedBy: currentUser.name, addedByRole: currentUser.role||'Staff', createdAt: ts(),
     });
     await logActivity('note_added', `Note added for ${client.name}`, currentUser);
     setNewNote('');
@@ -1039,6 +1074,7 @@ const ClientDetailView = ({ clientId, currentUser, isAdmin, onBack }) => {
                         <span>Created: {fmtDate(c.createdAt)}</span>
                         <span>By: {c.createdBy}</span>
                         {c.fee && <span className="font-bold text-slate-600">Fee: PKR {Number(c.fee).toLocaleString()}</span>}
+                        {c.transferLog?.length > 0 && <span className="text-purple-500 font-bold">🔄 Transferred {c.transferLog.length}x</span>}
                       </div>
                       {c.history?.length > 0 && (
                         <div className="mt-3 space-y-1">
@@ -1053,14 +1089,23 @@ const ClientDetailView = ({ clientId, currentUser, isAdmin, onBack }) => {
                         </div>
                       )}
                     </div>
-                    {isAdmin && (
-                      <div className="flex flex-col gap-2">
-                        <Select value={c.status} onChange={e => { setUpdatingCase(c); updateCaseStatus(c.id, e.target.value, statusNote); }}
-                          options={CASE_STATUSES.map(s=>({value:s.id, label:s.label}))} className="text-xs py-1.5" />
-                        <Btn icon={FileText} size="sm" variant="outline" onClick={() => { setSelectedCase(c); setShowReport(true); }}>Report</Btn>
-                        <Btn icon={MessageCircle} size="sm" variant="outline" onClick={() => { setTab('whatsapp'); }}>WhatsApp</Btn>
+                    <div className="flex flex-col gap-2 min-w-[160px]">
+                      {/* Assigned staff display */}
+                      <div className="px-3 py-1.5 bg-slate-50 rounded-xl text-[10px]">
+                        <p className="text-slate-400 font-bold uppercase">Assigned To</p>
+                        <p className="text-slate-700 font-bold">{c.assignedTo || 'Unassigned'}</p>
+                        {c.department && <p className="text-amber-600 font-bold">{c.department}</p>}
                       </div>
-                    )}
+                      {isAdmin && (
+                        <>
+                          <Select value={c.status} onChange={e => { setUpdatingCase(c); updateCaseStatus(c.id, e.target.value, statusNote); }}
+                            options={CASE_STATUSES.map(s=>({value:s.id, label:s.label}))} className="text-xs py-1.5" />
+                          <Btn icon={ArrowRight} size="sm" variant="amber" onClick={() => { setTransferCaseObj(c); setTransferForm({staffName:'',staffId:'',department:c.department||'',note:''}); }}>Transfer Case</Btn>
+                          <Btn icon={FileText} size="sm" variant="outline" onClick={() => { setSelectedCase(c); setShowReport(true); }}>Report</Btn>
+                          <Btn icon={MessageCircle} size="sm" variant="outline" onClick={() => { setTab('whatsapp'); }}>WhatsApp</Btn>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </Card>
               );
@@ -1158,35 +1203,82 @@ const ClientDetailView = ({ clientId, currentUser, isAdmin, onBack }) => {
       {/* ── TIMELINE/NOTES TAB ── */}
       {tab === 'notes' && (
         <div className="space-y-4">
-          <div className="flex gap-2">
-            <input type="text" placeholder="Add a timeline note or progress update..."
-              value={newNote} onChange={e => setNewNote(e.target.value)}
-              onKeyDown={e => e.key==='Enter' && addNote()}
-              className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-400" />
-            <Btn icon={Send} variant="amber" onClick={addNote} disabled={!newNote.trim()}>Add</Btn>
+          {/* Rich Note Editor — Google Docs Style */}
+          <div className="bg-white border-2 border-amber-200 rounded-2xl overflow-hidden shadow-sm">
+            <div className="bg-amber-50 px-4 py-2 border-b border-amber-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ScrollText size={14} className="text-amber-600"/>
+                <span className="text-xs font-black text-amber-700">CASE NOTES — Staff Handover Document</span>
+              </div>
+              <span className="text-[10px] text-amber-500">{notes.length} entries</span>
+            </div>
+            {/* Note type selector */}
+            <div className="px-4 pt-3 pb-1 flex gap-2 flex-wrap">
+              {[
+                {id:'progress', label:'📋 Progress Update', color:'bg-blue-50 text-blue-700'},
+                {id:'action',   label:'⚡ Action Required', color:'bg-red-50 text-red-700'},
+                {id:'handover', label:'🔄 Staff Handover',  color:'bg-purple-50 text-purple-700'},
+                {id:'embassy',  label:'🏛️ Embassy Note',    color:'bg-green-50 text-green-700'},
+                {id:'client',   label:'👤 Client Update',   color:'bg-amber-50 text-amber-700'},
+              ].map(t => (
+                <button key={t.id}
+                  onClick={() => setNoteType && setNoteType(t.id)}
+                  className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition ${(noteType||'progress')===t.id ? t.color+' border-current' : 'bg-slate-50 text-slate-400 border-transparent hover:bg-slate-100'}`}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <div className="p-4 space-y-3">
+              <textarea
+                placeholder={`Write your ${(noteType||'progress')==='handover' ? 'handover instructions for the next staff member — include what has been done, what is pending, and what needs attention next' : (noteType||'progress')==='action' ? 'action required — be specific about what needs to be done and by when' : 'note here...'}`}
+                value={newNote} onChange={e => setNewNote(e.target.value)} rows={4}
+                className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 text-sm outline-none focus:ring-2 focus:ring-amber-400/20 focus:border-amber-400 resize-none"/>
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] text-slate-400">📌 Notes are permanent case records — visible to all staff assigned to this case</p>
+                <Btn icon={Send} variant="amber" onClick={addNote} disabled={!newNote.trim()}>Save Note</Btn>
+              </div>
+            </div>
           </div>
+
+          {/* Timeline Notes */}
           {notes.length === 0
-            ? <EmptyState icon={MessageSquare} title="No notes yet" desc="Track case progress with timeline notes" />
+            ? <EmptyState icon={ScrollText} title="No case notes yet" desc="Add progress updates, handover notes, embassy updates and action items" />
             : (
-              <div className="relative pl-6">
-                <div className="absolute left-2 top-0 bottom-0 w-0.5 bg-slate-200" />
-                {notes.map(n => (
-                  <div key={n.id} className="relative mb-4">
-                    <div className="absolute -left-4 top-2.5 w-2.5 h-2.5 rounded-full bg-amber-500 border-2 border-white shadow" />
-                    <div className="bg-white border rounded-2xl p-4 shadow-sm group">
-                      <p className="text-sm text-slate-700 whitespace-pre-wrap">{n.content}</p>
-                      <div className="flex items-center justify-between mt-2">
-                        <p className="text-[10px] text-slate-400">{n.addedBy} • {fmtTime(n.createdAt)}</p>
-                        {isAdmin && (
-                          <button onClick={() => deleteNote(n.id)}
-                            className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-50 text-red-400 rounded-lg transition" title="Delete note">
-                            <Trash2 size={12}/>
-                          </button>
-                        )}
+              <div className="space-y-3">
+                <p className="text-xs font-black text-slate-500 uppercase tracking-wider">📋 Case History & Notes Timeline</p>
+                <div className="relative pl-6">
+                  <div className="absolute left-2 top-0 bottom-0 w-0.5 bg-slate-200" />
+                  {notes.map(n => {
+                    const typeConfig = {
+                      progress: { color:'bg-blue-500',   label:'Progress',  bg:'bg-blue-50',   text:'text-blue-700'   },
+                      action:   { color:'bg-red-500',    label:'Action ⚡', bg:'bg-red-50',    text:'text-red-700'    },
+                      handover: { color:'bg-purple-500', label:'Handover 🔄',bg:'bg-purple-50', text:'text-purple-700' },
+                      embassy:  { color:'bg-green-500',  label:'Embassy 🏛️', bg:'bg-green-50',  text:'text-green-700'  },
+                      client:   { color:'bg-amber-500',  label:'Client 👤',  bg:'bg-amber-50',  text:'text-amber-700'  },
+                    };
+                    const tc = typeConfig[n.noteType||'progress'] || typeConfig.progress;
+                    return (
+                      <div key={n.id} className="relative mb-4">
+                        <div className={`absolute -left-4 top-3 w-2.5 h-2.5 rounded-full ${tc.color} border-2 border-white shadow`} />
+                        <div className="bg-white border rounded-2xl p-4 shadow-sm group hover:shadow-md transition">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${tc.bg} ${tc.text}`}>{tc.label}</span>
+                            <div className="flex items-center gap-2">
+                              <p className="text-[10px] text-slate-400">{n.addedBy} • {fmtTime(n.createdAt)}</p>
+                              {isAdmin && (
+                                <button onClick={() => deleteNote(n.id)}
+                                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 text-red-400 rounded-lg transition">
+                                  <Trash2 size={11}/>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{n.content}</p>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                ))}
+                    );
+                  })}
+                </div>
               </div>
             )
           }
@@ -1206,6 +1298,58 @@ const ClientDetailView = ({ clientId, currentUser, isAdmin, onBack }) => {
         </div>
       )}
 
+
+      {/* ── CASE TRANSFER MODAL ── */}
+      {transferCaseObj && (
+        <Modal open={!!transferCaseObj} onClose={() => setTransferCaseObj(null)} title="🔄 Transfer / Reallocate Case">
+          <div className="space-y-4">
+            <div className="p-3 bg-amber-50 rounded-xl border border-amber-100">
+              <p className="text-xs font-black text-amber-700 uppercase">Case Being Transferred</p>
+              <p className="text-sm font-bold text-slate-800 mt-1">{getVisa(transferCaseObj.visaType).icon} {getVisa(transferCaseObj.visaType).label}</p>
+              <p className="text-xs text-slate-500 mt-0.5">Currently: <span className="font-bold text-amber-600">{transferCaseObj.assignedTo||'Unassigned'}</span> — {transferCaseObj.department||'No dept'}</p>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 mb-1">Transfer To — Staff Member</label>
+              <select value={transferForm.staffId} onChange={e=>{
+                const s = staffList.find(x=>x.id===e.target.value);
+                setTransferForm(f=>({...f, staffId:e.target.value, staffName:s?.name||''}));
+              }} className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none text-sm">
+                <option value="">-- Select Staff Member --</option>
+                {staffList.map(s=>(
+                  <option key={s.id} value={s.id}>{s.name} — {s.role||'Staff'}{s.designation?` (${s.designation})`:''}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 mb-1">Move To Department</label>
+              <select value={transferForm.department} onChange={e=>setTransferForm(f=>({...f,department:e.target.value}))}
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none text-sm">
+                <option value="">-- Select Department --</option>
+                {['Marketing','Visa Processing','Document Review','Client Relations','Finance','Management','Legal & Compliance'].map(d=>(
+                  <option key={d}>{d}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-500 mb-1">Handover Note <span className="text-red-500">*</span></label>
+              <textarea value={transferForm.note} onChange={e=>setTransferForm(f=>({...f,note:e.target.value}))} rows={4}
+                placeholder="What has been done? What is pending? What should the next staff member do first?..."
+                className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-400/20 text-sm resize-none"/>
+            </div>
+            <div className="flex gap-2">
+              <Btn variant="outline" onClick={()=>setTransferCaseObj(null)} className="flex-1">Cancel</Btn>
+              <Btn icon={ArrowRight} variant="amber" disabled={!transferForm.staffName||!transferForm.department||!transferForm.note.trim()}
+                onClick={async()=>{
+                  await transferCase(transferCaseObj.id, transferForm.staffName, transferForm.staffId, transferForm.department, transferForm.note);
+                  setTransferCaseObj(null);
+                  setTransferForm({staffName:'',staffId:'',department:'',note:''});
+                }} className="flex-1">
+                Transfer Case
+              </Btn>
+            </div>
+          </div>
+        </Modal>
+      )}
       {/* ── MODALS ── */}
       <Modal open={editing} onClose={() => setEditing(false)} title="Edit Client Profile" wide>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1242,6 +1386,25 @@ const ClientDetailView = ({ clientId, currentUser, isAdmin, onBack }) => {
               <option value="">Select visa category...</option>
               {Object.entries(VISA_CATEGORIES.reduce((acc,v)=>({...acc,[v.group]:[...(acc[v.group]||[]),v]}),{})).map(([grp,cats])=>(
                 <optgroup key={grp} label={grp}>{cats.map(c=><option key={c.id} value={c.id}>{c.icon} {c.label}</option>)}</optgroup>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-500 mb-1">Assign To Staff</label>
+            <select value={newCase.assignedTo||''} onChange={e=>{
+              const s = staffList.find(x=>x.name===e.target.value);
+              setNewCase({...newCase, assignedTo:e.target.value, assignedStaff:s?.id||''});
+            }} className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none text-sm">
+              <option value="">-- Assign to staff --</option>
+              {staffList.map(s=><option key={s.id} value={s.name}>{s.name} ({s.role||'Staff'})</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-500 mb-1">Department Stage</label>
+            <select value={newCase.department||'Marketing'} onChange={e=>setNewCase({...newCase,department:e.target.value})}
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none text-sm">
+              {['Marketing','Visa Processing','Document Review','Client Relations','Finance','Management','Legal & Compliance'].map(d=>(
+                <option key={d}>{d}</option>
               ))}
             </select>
           </div>
@@ -1637,9 +1800,25 @@ const StaffView = ({ currentUser }) => {
     alert(`${s.name} will be logged out on their next action.`);
   };
 
+  const [editStaff, setEditStaff] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const STAFF_ROLES = ['Staff','Senior Staff','Case Officer','Accounts','Visa Consultant','Immigration Advisor','Team Lead','Manager','Admin Assistant','Document Processor','Client Relations','Finance Officer'];
+  const STAFF_DEPARTMENTS = ['Visa Processing','Client Relations','Finance','Operations','Management','IT Support','Marketing','Legal & Compliance'];
+
+  const openEdit = (s) => {
+    setEditStaff(s);
+    setEditForm({ name:s.name, phone:s.phone, email:s.email||'', role:s.role||'Staff', designation:s.designation||'', department:s.department||'' });
+  };
+  const saveEdit = async () => {
+    if (!editStaff) return;
+    await updateDoc(doc(db, DB_PATH('staff'), editStaff.id), { ...editForm, updatedAt:ts(), updatedBy:currentUser.name });
+    await logActivity('staff_updated', `Updated staff profile: ${editForm.name}`, currentUser);
+    setEditStaff(null);
+  };
+
   return (
     <div className="space-y-6">
-      <SectionHeader title="Staff Management" subtitle="Add, monitor, and control team access" actions={
+      <SectionHeader title="Staff Management" subtitle="Add, monitor, and control team access — up to 10 staff" actions={
         <Btn icon={Plus} variant="amber" onClick={() => setShowAdd(true)}>Add Staff</Btn>
       }/>
 
@@ -1668,6 +1847,9 @@ const StaffView = ({ currentUser }) => {
                         <Badge label={s.role || 'Staff'} color="bg-slate-100 text-slate-600" small/>
                       </div>
                       <p className="text-xs text-slate-500">{s.phone} {s.email && `• ${s.email}`}</p>
+                      {(s.designation || s.department) && (
+                        <p className="text-xs text-amber-600 font-bold mt-0.5">{s.designation} {s.department && `• ${s.department}`}</p>
+                      )}
                       <div className="flex items-center gap-3 mt-1 text-xs text-slate-400">
                         <span>PIN: <span className="font-black text-slate-700 tracking-widest">{s.pin}</span></span>
                         <span>Added: {fmtDate(s.createdAt)}</span>
@@ -1675,6 +1857,7 @@ const StaffView = ({ currentUser }) => {
                       </div>
                     </div>
                     <div className="flex items-center gap-1 flex-shrink-0">
+                      <button onClick={() => openEdit(s)} title="Edit Profile/Role" className="p-2 hover:bg-slate-100 text-slate-500 rounded-xl transition"><Edit3 size={16}/></button>
                       <button onClick={() => forceLogout(s)} title="Force Logout" className="p-2 hover:bg-orange-50 text-orange-500 rounded-xl transition"><Power size={16}/></button>
                       <button onClick={() => resetPin(s)} title="Reset PIN" className="p-2 hover:bg-blue-50 text-blue-500 rounded-xl transition"><Key size={16}/></button>
                       <button onClick={() => suspendStaff(s)} title={s.suspended?'Reinstate':'Suspend'}
@@ -1711,6 +1894,40 @@ const StaffView = ({ currentUser }) => {
             </div>
           )
       )}
+
+      {/* Edit Staff Modal */}
+      <Modal open={!!editStaff} onClose={() => setEditStaff(null)} title="Edit Staff Profile">
+        <div className="space-y-3">
+          <Input label="Full Name" required value={editForm.name||''} onChange={e=>setEditForm(f=>({...f,name:e.target.value}))} />
+          <Input label="Phone Number" required value={editForm.phone||''} onChange={e=>setEditForm(f=>({...f,phone:e.target.value}))} />
+          <Input label="Email" type="email" value={editForm.email||''} onChange={e=>setEditForm(f=>({...f,email:e.target.value}))} />
+          <div>
+            <label className="block text-xs font-bold text-slate-500 mb-1">Role / Category</label>
+            <select value={editForm.role||'Staff'} onChange={e=>setEditForm(f=>({...f,role:e.target.value}))}
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-400/20 text-sm">
+              {STAFF_ROLES.map(r=><option key={r}>{r}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-500 mb-1">Designation (Job Title)</label>
+            <input value={editForm.designation||''} onChange={e=>setEditForm(f=>({...f,designation:e.target.value}))}
+              placeholder="e.g. Senior Visa Consultant, Case Manager"
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-400/20 text-sm"/>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-500 mb-1">Department</label>
+            <select value={editForm.department||''} onChange={e=>setEditForm(f=>({...f,department:e.target.value}))}
+              className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-400/20 text-sm">
+              <option value="">-- Select Department --</option>
+              {STAFF_DEPARTMENTS.map(d=><option key={d}>{d}</option>)}
+            </select>
+          </div>
+          <div className="flex gap-2 pt-2">
+            <Btn variant="outline" onClick={() => setEditStaff(null)} className="flex-1">Cancel</Btn>
+            <Btn icon={Save} variant="amber" onClick={saveEdit} className="flex-1">Save Changes</Btn>
+          </div>
+        </div>
+      </Modal>
 
       {/* PIN Display Modal */}
       <Modal open={!!newPin} onClose={() => setNewPin(null)} title="Staff Credentials">
@@ -1880,18 +2097,48 @@ const ArchiveView = ({ currentUser, isAdmin, onSelectClient }) => {
   };
 
   const filtered = archived.filter(c => {
-    const q = search.toLowerCase();
-    return !q || c.name?.toLowerCase().includes(q) || c.cnic?.includes(q) || c.passport?.toLowerCase().includes(q);
+    const q = search.toLowerCase().trim();
+    if (!q) return true;
+    return (
+      c.name?.toLowerCase().includes(q) ||
+      c.cnic?.replace(/-/g,'').includes(q.replace(/-/g,'')) ||
+      c.passport?.toLowerCase().includes(q) ||
+      c.phone?.replace(/\D/g,'').includes(q.replace(/\D/g,'')) ||
+      c.email?.toLowerCase().includes(q) ||
+      c.city?.toLowerCase().includes(q) ||
+      c.id?.toLowerCase().includes(q) ||
+      c.occupation?.toLowerCase().includes(q) ||
+      c.employer?.toLowerCase().includes(q) ||
+      c.visaCategory?.toLowerCase().includes(q)
+    );
   });
 
   return (
     <div className="space-y-6">
-      <SectionHeader title="Archive" subtitle="Soft-deleted clients — recoverable by admin"/>
-      <div className="relative">
-        <Search size={16} className="absolute left-3 top-3 text-slate-400"/>
-        <input placeholder="Search by name, CNIC, or passport..."
-          value={search} onChange={e=>setSearch(e.target.value)}
-          className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-amber-500/20"/>
+      <SectionHeader title="🗄️ Archive — Unarchive & Recover Clients" subtitle="Search by any detail — name, CNIC, passport, phone, file number, city, occupation"/>
+
+      {/* Multi-field search */}
+      <div className="bg-gradient-to-r from-[#1a1a2e] to-[#16213e] rounded-2xl p-4">
+        <p className="text-white/60 text-xs font-bold mb-3 uppercase tracking-wider">🔍 Smart Archive Search</p>
+        <div className="relative">
+          <Search size={16} className="absolute left-3 top-3 text-white/40"/>
+          <input
+            placeholder="Search by: Name • CNIC • Passport No. • Phone • File No. • City • Email • Employer..."
+            value={search} onChange={e=>setSearch(e.target.value)}
+            className="w-full pl-9 pr-4 py-2.5 rounded-xl bg-white/10 border border-white/20 text-white placeholder-white/30 text-sm outline-none focus:ring-2 focus:ring-amber-400/30 focus:border-amber-400"/>
+        </div>
+        <div className="flex flex-wrap gap-2 mt-3">
+          {['CNIC','Passport','Phone','City','Employer','Email'].map(hint => (
+            <span key={hint} className="px-2 py-0.5 bg-white/10 text-white/50 text-[10px] rounded-full font-bold">{hint} ✓</span>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-slate-500">
+          {search ? <><span className="font-bold text-amber-600">{filtered.length}</span> match{filtered.length!==1?'es':''} found for "{search}"</> : <><span className="font-bold">{archived.length}</span> archived clients</>}
+        </p>
+        {search && filtered.length > 0 && <span className="text-xs text-green-600 font-bold">✅ Found {filtered.length} result{filtered.length!==1?'s':''}</span>}
       </div>
       {loading ? (
         <div className="flex items-center justify-center h-48"><Spinner size={8}/></div>
@@ -1906,19 +2153,32 @@ const ArchiveView = ({ currentUser, isAdmin, onSelectClient }) => {
                   {c.name?.[0]?.toUpperCase()}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-bold text-slate-700">{c.name}</p>
-                  <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
-                    <span className="font-mono">CNIC: {c.cnic}</span>
-                    {c.passport && <span className="font-mono">PP: {c.passport}</span>}
+                  <p className="font-bold text-slate-800 text-base">{c.name}</p>
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 mt-1">
+                    {c.cnic     && <span className="font-mono bg-slate-100 px-2 py-0.5 rounded">CNIC: {c.cnic}</span>}
+                    {c.passport && <span className="font-mono bg-slate-100 px-2 py-0.5 rounded">PP: {c.passport}</span>}
+                    {c.phone    && <span className="font-mono bg-slate-100 px-2 py-0.5 rounded">📞 {c.phone}</span>}
+                    {c.city     && <span className="bg-slate-100 px-2 py-0.5 rounded">📍 {c.city}</span>}
                   </div>
-                  <p className="text-xs text-red-400 mt-1">Archived: {fmtDate(c.deletedAt)} • By: {c.deletedBy}</p>
+                  {c.occupation && <p className="text-xs text-slate-400 mt-1">💼 {c.occupation} {c.employer ? `@ ${c.employer}` : ''}</p>}
+                  <div className="flex flex-wrap gap-3 mt-1 text-xs text-slate-400">
+                    <span className="text-red-400">Archived: {fmtDate(c.deletedAt)} by {c.deletedBy}</span>
+                    <span className="font-mono text-slate-300">File: {c.id?.slice(-8)?.toUpperCase()}</span>
+                  </div>
                 </div>
-                {isAdmin && (
-                  <div className="flex gap-2 flex-shrink-0">
-                    <Btn icon={RotateCcw} size="sm" variant="green" onClick={() => recover(c)}>Recover</Btn>
-                    <Btn icon={Trash2} size="sm" variant="danger" onClick={() => permanentDelete(c)}>Delete Forever</Btn>
-                  </div>
-                )}
+                <div className="flex flex-col gap-2 flex-shrink-0">
+                  {isAdmin && (
+                    <>
+                      <Btn icon={RotateCcw} size="sm" variant="green" onClick={async () => { await recover(c); onSelectClient && onSelectClient(c.id); }}>
+                        Unarchive & Open
+                      </Btn>
+                      <Btn icon={Eye} size="sm" variant="outline" onClick={() => onSelectClient && onSelectClient(c.id)}>
+                        View Case
+                      </Btn>
+                      <Btn icon={Trash2} size="sm" variant="red" onClick={() => permanentDelete(c)}>Delete Forever</Btn>
+                    </>
+                  )}
+                </div>
               </div>
             </Card>
           ))}
@@ -2761,25 +3021,29 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
       .then(s=>{setUploaded(s.docs.map(d=>({id:d.id,...d.data()})));setLoadingDocs(false);});
   },[selClient]);
 
+  const [uploadStatus, setUploadStatus] = useState('');
+
   const handleUpload = async () => {
     if(!file||!selClient) { alert('Select client and file first.'); return; }
-    if(!storage) { alert('Firebase Storage not configured.'); return; }
+    if(!storage) { alert('Firebase Storage not configured. Check your Firebase console.'); return; }
     setUploading(true); setProgress(0);
+    setUploadStatus('📤 Uploading to Firebase Cloud...');
     try {
       const path = `clients/${selClient}/${docType}/${Date.now()}_${file.name}`;
-      const ref = storageRef(storage, path);
-      const task = uploadBytesResumable(ref, file);
-      task.on('state_changed', snap=>setProgress(Math.round(snap.bytesTransferred/snap.totalBytes*100)));
-      await new Promise((res,rej)=>task.on('state_changed',null,rej,res));
-      const url = await getDownloadURL(ref);
+      const sRef = storageRef(storage, path);
+      const task = uploadBytesResumable(sRef, file);
+      task.on('state_changed', snap => setProgress(Math.round(snap.bytesTransferred/snap.totalBytes*100)));
+      await new Promise((res,rej) => task.on('state_changed', null, rej, res));
+      const url = await getDownloadURL(sRef);
       const docId = genId('doc');
-      const docData = { id:docId, name:file.name, type:docType, url, path, size:file.size, uploadedBy:currentUser.name, uploadedAt:ts(), clientId:selClient };
+      const docData = { id:docId, name:file.name, type:docType, url, path, size:file.size, uploadedBy:currentUser.name, uploadedAt:ts(), clientId:selClient, storage:'firebase' };
       await setDoc(doc(db, SUB_PATH('clients',selClient,'documents'), docId), docData);
-      await logActivity('doc_uploaded', `Doc uploaded: ${file.name} for client`, currentUser);
+      await logActivity('doc_uploaded', `Doc uploaded: ${file.name} (${fmtFileSize(file.size)})`, currentUser);
       setUploaded(p=>[docData,...p]);
       setFile(null); setProgress(0);
-      alert('✅ Document uploaded successfully!');
-    } catch(e) { alert('Upload failed: '+e.message); }
+      setUploadStatus('✅ Uploaded successfully!');
+      setTimeout(()=>setUploadStatus(''), 3000);
+    } catch(e) { alert('Upload failed: '+e.message); setUploadStatus(''); }
     setUploading(false);
   };
 
@@ -2817,24 +3081,28 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
                 className="w-full text-sm text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:font-bold file:bg-amber-50 file:text-amber-600 hover:file:bg-amber-100"/>
             </div>
             {file && <p className="text-xs text-slate-500">📄 {file.name} ({fmtFileSize(file.size)})</p>}
-            {uploading && (
-              <div>
+            {(uploading || uploadStatus) && (
+              <div className="space-y-2">
                 <div className="w-full bg-slate-100 rounded-full h-2">
-                  <div className="h-2 bg-amber-500 rounded-full transition-all" style={{width:progress+'%'}}/>
+                  <div className="h-2 bg-amber-500 rounded-full transition-all duration-300" style={{width:progress+'%'}}/>
                 </div>
-                <p className="text-xs text-amber-600 mt-1 font-bold">Uploading... {progress}%</p>
+                <p className="text-xs text-amber-600 font-bold">{uploadStatus || `Uploading... ${progress}%`}</p>
               </div>
             )}
+            <div className="p-2 bg-blue-50 border border-blue-100 rounded-xl text-xs text-blue-700">
+              🔥 Firebase Storage — No file size limit. Bank statements, PDFs, scans all supported.
+            </div>
             <button onClick={handleUpload} disabled={uploading||!file||!selClient}
               className="w-full py-3 bg-amber-600 hover:bg-amber-500 text-white font-black rounded-xl flex items-center justify-center gap-2 disabled:opacity-50 transition">
-              {uploading?<Spinner/>:<><Upload size={16}/> Upload to Firebase</>}
+              {uploading?<Spinner/>:<><Upload size={16}/> Upload to Firebase Cloud</>}
             </button>
           </div>
         </Card>
         <Card>
-          <p className="font-black text-slate-800 mb-4">
+          <p className="font-black text-slate-800 mb-2">
             {selClient ? `📁 Documents for ${clients.find(c=>c.id===selClient)?.name||'Client'}` : '📁 Select a client to view documents'}
           </p>
+
           {loadingDocs ? <div className="flex justify-center py-6"><Spinner size={6}/></div> :
           uploaded.length === 0 ? (
             <div className="text-center py-8 text-slate-400">
@@ -2849,13 +3117,15 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
                     <FileText size={16} className="text-amber-600 flex-shrink-0"/>
                     <div className="min-w-0">
                       <p className="text-xs font-bold text-slate-700 truncate">{d.name}</p>
-                      <p className="text-[10px] text-slate-400">{d.type} • {fmtFileSize(d.size||0)}</p>
+                      <p className="text-[10px] text-slate-400">{d.type} • {fmtFileSize(d.size||0)} • {fmtDate(d.uploadedAt)}</p>
                     </div>
                   </div>
-                  <a href={d.url} target="_blank" rel="noopener noreferrer"
-                    className="flex-shrink-0 ml-2 px-2 py-1 bg-blue-50 text-blue-600 text-xs font-bold rounded-lg hover:bg-blue-100">
-                    View
-                  </a>
+                  {d.url && (
+                    <a href={d.url} target="_blank" rel="noopener noreferrer"
+                      className="flex-shrink-0 ml-2 px-3 py-1 bg-amber-50 text-amber-600 text-xs font-bold rounded-lg hover:bg-amber-100">
+                      View
+                    </a>
+                  )}
                 </div>
               ))}
             </div>
