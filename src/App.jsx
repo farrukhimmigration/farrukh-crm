@@ -1542,6 +1542,9 @@ const ClientsView = ({ currentUser, isAdmin, onSelectClient }) => {
   const [formError, setFormError] = useState('');
   const [selected, setSelected]   = useState(new Set());
   const [deleting, setDeleting]   = useState(false);
+  const [showAssign, setShowAssign] = useState(false);
+  const [assigning, setAssigning] = useState(false);
+  const [assignToStaff, setAssignToStaff] = useState('');
 
   const toggleSelect = (id, e) => {
     e.stopPropagation();
@@ -1559,6 +1562,26 @@ const ClientsView = ({ currentUser, isAdmin, onSelectClient }) => {
     }
     setSelected(new Set());
     setDeleting(false);
+  };
+
+  const assignToStaffMember = async () => {
+    if (!assignToStaff || !selected.size) return;
+    setAssigning(true);
+    const staffMember = staffList.find(s => s.id === assignToStaff);
+    for (const id of selected) {
+      const c = clients.find(x=>x.id===id);
+      await updateDoc(doc(db, DB_PATH('clients'), id), { 
+        assignedTo: staffMember?.name || '', 
+        assignedStaff: staffMember?.id || '',
+        updatedAt: ts(),
+        updatedBy: currentUser.name,
+      });
+      await logActivity('case_assigned', `Assigned ${c?.name} to ${staffMember?.name}`, currentUser);
+    }
+    setSelected(new Set());
+    setAssignToStaff('');
+    setShowAssign(false);
+    setAssigning(false);
   };
 
   const deleteSingle = async (c, e) => {
@@ -1598,6 +1621,22 @@ const ClientsView = ({ currentUser, isAdmin, onSelectClient }) => {
       id, ...form, fileNumber, deleted:false, permanentlyDeleted:false, addedBy:currentUser.name, createdAt:ts(),
     });
     await logActivity('client_created', `Added new client: ${form.name}`, currentUser);
+    // Create Google Drive folder with file number
+    if (DRIVE_URL && fileNumber) {
+      try {
+        await fetch(DRIVE_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            action: 'createFolder',
+            folderName: fileNumber,
+            clientName: form.name,
+            clientId: id,
+          }),
+        });
+        await logActivity('drive_folder_created', `Google Drive folder created: ${fileNumber}`, currentUser);
+      } catch (e) { console.error('Drive folder creation failed:', e); }
+    }
     setForm({ name:'',cnic:'',passport:'',phone:'',email:'',nationality:'Pakistani',occupation:'',employer:'',income:'',visaInterest:'',dob:'',passportExpiry:'',city:'',address:'',travelHistory:'',priorRefusals:'',fbrStatus:'',ntn:'',notes:'' });
     setShowAdd(false); setSaving(false);
   };
@@ -1614,9 +1653,14 @@ const ClientsView = ({ currentUser, isAdmin, onSelectClient }) => {
       <SectionHeader title="Clients" subtitle={`${clients.length} registered clients`} actions={
         isAdmin && <div className="flex gap-2">
           {selected.size > 0 && (
-            <Btn icon={Trash2} variant="red" onClick={deleteSelected} loading={deleting}>
-              Delete {selected.size} Selected
-            </Btn>
+            <>
+              <Btn icon={Users} variant="amber" onClick={() => setShowAssign(true)}>
+                Assign to Staff
+              </Btn>
+              <Btn icon={Trash2} variant="red" onClick={deleteSelected} loading={deleting}>
+                Delete {selected.size} Selected
+              </Btn>
+            </>
           )}
           <Btn icon={Plus} variant="amber" onClick={() => setShowAdd(true)}>New Client</Btn>
         </div>
@@ -1666,6 +1710,11 @@ const ClientsView = ({ currentUser, isAdmin, onSelectClient }) => {
                   <span className="font-mono">{c.cnic}</span>
                   {c.passport && <span className="font-mono">PP: {c.passport}</span>}
                   {c.phone    && <span>{c.phone}</span>}
+                  {c.assignedTo && (
+                    <span className="inline-flex items-center gap-1 font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
+                      <User size={10}/> {c.assignedTo}
+                    </span>
+                  )}
                 </div>
                 {c.visaInterest && (
                   <div className="mt-1">
@@ -1738,6 +1787,32 @@ const ClientsView = ({ currentUser, isAdmin, onSelectClient }) => {
           <div className="flex gap-2">
             <Btn variant="outline" onClick={() => setShowAdd(false)} className="flex-1">Cancel</Btn>
             <Btn icon={Plus} variant="amber" onClick={addClient} loading={saving} disabled={!form.name||!form.cnic} className="flex-1">Register Client</Btn>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Assign to Staff Modal */}
+      <Modal open={showAssign} onClose={() => setShowAssign(false)} title="Assign Cases to Staff">
+        <div className="space-y-4">
+          <div className="p-3 bg-amber-50 rounded-xl border border-amber-100">
+            <p className="text-xs font-black text-amber-700 uppercase">Selected Clients</p>
+            <p className="text-sm font-bold text-slate-800 mt-1">{selected.size} client(s) will be assigned</p>
+          </div>
+          <div>
+            <label className="block text-xs font-bold text-slate-500 mb-1">Assign To Staff Member <span className="text-red-500">*</span></label>
+            <select value={assignToStaff} onChange={e=>setAssignToStaff(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-400/20 text-sm">
+              <option value="">-- Select Staff Member --</option>
+              {staffList.map(s=>(
+                <option key={s.id} value={s.id}>{s.name} — {s.role||'Staff'}{s.designation?` (${s.designation})`:''}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex gap-2 pt-2">
+            <Btn variant="outline" onClick={() => setShowAssign(false)} className="flex-1">Cancel</Btn>
+            <Btn icon={UserCheck} variant="amber" onClick={assignToStaffMember} loading={assigning} disabled={!assignToStaff} className="flex-1">
+              Assign Cases
+            </Btn>
           </div>
         </div>
       </Modal>
@@ -1958,8 +2033,49 @@ const StaffView = ({ currentUser }) => {
 
   const [editStaff, setEditStaff] = useState(null);
   const [editForm, setEditForm] = useState({});
-  const STAFF_ROLES = ['Staff','Senior Staff','Case Officer','Accounts','Visa Consultant','Immigration Advisor','Team Lead','Manager','Admin Assistant','Document Processor','Client Relations','Finance Officer'];
+  const [roles, setRoles] = useState([]);
+  const [showRolesTab, setShowRolesTab] = useState(false);
+  const [newRole, setNewRole] = useState('');
+  const [editRole, setEditRole] = useState(null);
+  const [editRoleVal, setEditRoleVal] = useState('');
+  const DEFAULT_ROLES = ['Staff','Senior Staff','Case Officer','Accounts','Visa Consultant','Immigration Advisor','Team Lead','Manager','Admin Assistant','Document Processor','Client Relations','Finance Officer'];
+  const STAFF_ROLES = roles.length > 0 ? roles.map(r => r.label) : DEFAULT_ROLES;
   const STAFF_DEPARTMENTS = ['Visa Processing','Client Relations','Finance','Operations','Management','IT Support','Marketing','Legal & Compliance'];
+
+  // Load roles from Firestore
+  useEffect(() => {
+    if (!db) return;
+    const unsub = onSnapshot(collection(db, DB_PATH('staff_roles')), s => {
+      if (s.docs.length > 0) {
+        setRoles(s.docs.map(d => ({id:d.id, ...d.data()})).sort((a,b) => a.label?.localeCompare(b.label)));
+      } else {
+        setRoles(DEFAULT_ROLES.map((r,i) => ({id:`role_${i}`, label:r, isDefault:true})));
+      }
+    });
+    return unsub;
+  }, []);
+
+  const addRole = async () => {
+    if (!newRole.trim()) return;
+    const id = genId('role');
+    await setDoc(doc(db, DB_PATH('staff_roles'), id), { id, label:newRole.trim(), addedBy:currentUser.name, addedAt:ts() });
+    setNewRole('');
+    await logActivity('role_added', `Added staff role: ${newRole.trim()}`, currentUser);
+  };
+
+  const deleteRole = async (role) => {
+    if (role.isDefault) { alert('Cannot delete default roles. You can add custom ones.'); return; }
+    if (!window.confirm(`Delete role "${role.label}"?`)) return;
+    await deleteDoc(doc(db, DB_PATH('staff_roles'), role.id));
+    await logActivity('role_deleted', `Deleted staff role: ${role.label}`, currentUser);
+  };
+
+  const saveEditRole = async () => {
+    if (!editRole || !editRoleVal.trim()) return;
+    await updateDoc(doc(db, DB_PATH('staff_roles'), editRole.id), { label:editRoleVal.trim() });
+    setEditRole(null); setEditRoleVal('');
+    await logActivity('role_updated', `Updated staff role: ${editRoleVal.trim()}`, currentUser);
+  };
 
   const openEdit = (s) => {
     setEditStaff(s);
@@ -1975,9 +2091,61 @@ const StaffView = ({ currentUser }) => {
   return (
     <div className="space-y-6">
       <SectionHeader title="Staff Management" subtitle="Add, monitor, and control team access — up to 10 staff" actions={
-        <Btn icon={Plus} variant="amber" onClick={() => setShowAdd(true)}>Add Staff</Btn>
+        <div className="flex gap-2">
+          <Btn variant={showRolesTab ? 'amber' : 'outline'} size="sm" onClick={() => setShowRolesTab(!showRolesTab)}>
+            {showRolesTab ? 'Back to Staff' : 'Manage Roles'}
+          </Btn>
+          {!showRolesTab && <Btn icon={Plus} variant="amber" onClick={() => setShowAdd(true)}>Add Staff</Btn>}
+        </div>
       }/>
 
+      {showRolesTab ? (
+        <div className="space-y-4">
+          <Card>
+            <h3 className="font-black text-slate-800 mb-3 flex items-center gap-2"><Shield size={18}/>Manage Staff Roles</h3>
+            <p className="text-xs text-slate-500 mb-4">Add, edit, or delete staff roles. These roles will be available when assigning staff.</p>
+            <div className="flex gap-2 mb-4">
+              <input value={newRole} onChange={e=>setNewRole(e.target.value)} 
+                placeholder="New role name..." onKeyDown={e=>e.key==='Enter'&&addRole()}
+                className="flex-1 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-400/20 text-sm"/>
+              <Btn icon={Plus} variant="amber" onClick={addRole} disabled={!newRole.trim()}>Add Role</Btn>
+            </div>
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {STAFF_ROLES.map((roleLabel, idx) => {
+                const roleObj = roles.find(r => r.label === roleLabel) || { isDefault: true };
+                return (
+                  <div key={idx} className="flex items-center justify-between px-4 py-3 bg-slate-50 rounded-xl hover:bg-slate-100 group">
+                    {editRole?.id === (roleObj.id || idx) ? (
+                      <div className="flex gap-2 flex-1 items-center">
+                        <input value={editRoleVal} onChange={e=>setEditRoleVal(e.target.value)}
+                          className="flex-1 px-2 py-1.5 rounded-lg border border-blue-300 text-sm outline-none"/>
+                        <button onClick={saveEditRole} className="px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded-lg">Save</button>
+                        <button onClick={()=>{setEditRole(null);setEditRoleVal('');}} className="px-3 py-1.5 bg-slate-200 text-xs font-bold rounded-lg">Cancel</button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <Badge label={roleLabel} color={roleObj.isDefault ? 'bg-slate-200 text-slate-600' : 'bg-amber-100 text-amber-700'} small/>
+                          {roleObj.isDefault && <span className="text-xs text-slate-400">default</span>}
+                        </div>
+                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition">
+                          {!roleObj.isDefault && (
+                            <>
+                              <button onClick={()=>{setEditRole(roleObj);setEditRoleVal(roleLabel);}} className="px-2 py-1 text-blue-500 text-xs font-bold hover:bg-blue-50 rounded">Edit</button>
+                              <button onClick={()=>deleteRole(roleObj)} className="px-2 py-1 text-red-500 text-xs font-bold hover:bg-red-50 rounded">Delete</button>
+                            </>
+                          )}
+                          {roleObj.isDefault && <span className="text-slate-300 text-xs">—</span>}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        </div>
+      ) : (
       <div className="flex gap-2">
         {[['active',`Active (${staff.length})`],['archived',`Archived (${archived.length})`]].map(([t,l]) => (
           <button key={t} onClick={() => setShowTab(t)}
@@ -2049,6 +2217,7 @@ const StaffView = ({ currentUser }) => {
               ))}
             </div>
           )
+      )}
       )}
 
       {/* Edit Staff Modal */}
@@ -2155,6 +2324,17 @@ const ActivityView = ({ currentUser }) => {
     note_added:'text-slate-500', login:'text-slate-600', logout:'text-slate-400',
   };
 
+  const clearAllLogs = async () => {
+    if (!window.confirm('⚠️ This will PERMANENTLY DELETE all activity logs. This action cannot be undone. Are you sure?')) return;
+    const batch = writeBatch(db);
+    logs.forEach(log => {
+      const ref = doc(db, DB_PATH('activity_log'), log.id);
+      batch.delete(ref);
+    });
+    await batch.commit();
+    await logActivity('activity_logs_cleared', `Cleared ${logs.length} activity logs`, currentUser);
+  };
+
   return (
     <div className="space-y-6">
       <SectionHeader title="Activity Monitor" subtitle={`${logs.length} total events recorded`}/>
@@ -2171,7 +2351,10 @@ const ActivityView = ({ currentUser }) => {
             <option key={a} value={a}>{a.replace(/_/g,' ')}</option>
           ))}
         </select>
-        <Btn icon={RefreshCw} variant="ghost" size="sm" onClick={() => { setFilterStaff(''); setFilterAction(''); }}>Clear</Btn>
+        <Btn icon={RefreshCw} variant="ghost" size="sm" onClick={() => { setFilterStaff(''); setFilterAction(''); }}>Reset Filters</Btn>
+        {logs.length > 0 && (
+          <Btn icon={Trash2} variant="red" size="sm" onClick={clearAllLogs}>Clear All Logs</Btn>
+        )}
       </div>
       {loading ? (
         <div className="flex items-center justify-center h-48"><Spinner size={8}/></div>
@@ -3313,6 +3496,7 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
   },[selClient]);
 
   const [uploadStatus, setUploadStatus] = useState('');
+  const [uploadSuccess, setUploadSuccess] = useState(false);
 
   const handleUpload = async () => {
     if (!file || !selClient) { alert('Select client and file first.'); return; }
@@ -3373,10 +3557,11 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
       setFile(null);
       setProgress(100);
       setUploadStatus('✅ Uploaded to Google Drive! Client folder created.');
-      setTimeout(() => { setUploadStatus(''); setProgress(0); }, 5000);
+      setUploadSuccess(true);
+      setTimeout(() => { setUploadStatus(''); setProgress(0); setUploadSuccess(false); }, 5000);
     } catch (e) {
       alert('Upload failed: ' + e.message);
-      setUploadStatus(''); setProgress(0);
+      setUploadStatus(''); setProgress(0); setUploadSuccess(false);
     }
     setUploading(false);
   };
@@ -3384,11 +3569,7 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
   return (
     <div className="space-y-6">
       <div className="bg-gradient-to-r from-[#1a1a2e] to-[#0f3460] rounded-2xl p-6 text-white">
-        <div className="flex items-center gap-3 mb-2">
-          <div className="bg-amber-500 p-2 rounded-xl"><Cloud size={20}/></div>
-          <h2 className="text-xl font-black">📁 Document Upload to Google Drive</h2>
-        </div>
-        <p className="text-white/60 text-sm">Upload client documents to Google Drive — free 15GB, auto-organized by client, accessible from phone and computer.</p>
+        <h2 className="text-2xl font-black">Upload client documents</h2>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
         <Card>
@@ -3460,12 +3641,9 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
                 <p className="text-xs text-amber-600 font-bold">{uploadStatus || `Uploading... ${progress}%`}</p>
               </div>
             )}
-            <div className={`p-2 rounded-xl text-xs font-bold border ${DRIVE_URL ? 'bg-green-50 border-green-100 text-green-700' : 'bg-red-50 border-red-100 text-red-700'}`}>
-              {DRIVE_URL ? '✅ Google Drive active — files saved to topnotchconsultancy@gmail.com (15GB free)' : '⚠️ Google Drive not configured — uploads disabled'}
-            </div>
             <button onClick={handleUpload} disabled={uploading||!file||!selClient}
-              className="w-full py-3 bg-amber-600 hover:bg-amber-500 text-white font-black rounded-xl flex items-center justify-center gap-2 disabled:opacity-50 transition">
-              {uploading?<Spinner/>:<><Upload size={16}/> Upload to Google Drive</>}
+              className={`w-full py-3 font-black rounded-xl flex items-center justify-center gap-2 disabled:opacity-50 transition ${uploadSuccess ? 'bg-green-600 hover:bg-green-500' : 'bg-amber-600 hover:bg-amber-500'} text-white`}>
+              {uploading?<Spinner/>:<><Upload size={16}/> Upload</>}
             </button>
           </div>
         </Card>
