@@ -1527,7 +1527,7 @@ const ClientDetailView = ({ clientId, currentUser, isAdmin, onBack, staffList = 
 // 11. CLIENTS VIEW (LIST)
 // ══════════════════════════════════════════════════════════════════════════
 
-const ClientsView = ({ currentUser, isAdmin, onSelectClient }) => {
+const ClientsView = ({ currentUser, isAdmin, onSelectClient, staffList = [] }) => {
   const [clients,   setClients]   = useState([]);
   const [search,    setSearch]    = useState('');
   const [filterCat, setFilterCat] = useState('');
@@ -2105,7 +2105,7 @@ const StaffView = ({ currentUser }) => {
             <h3 className="font-black text-slate-800 mb-3 flex items-center gap-2"><Shield size={18}/>Manage Staff Roles</h3>
             <p className="text-xs text-slate-500 mb-4">Add, edit, or delete staff roles. These roles will be available when assigning staff.</p>
             <div className="flex gap-2 mb-4">
-              <input value={newRole} onChange={e=>setNewRole(e.target.value)}
+              <input value={newRole} onChange={e=>setNewRole(e.target.value)} 
                 placeholder="New role name..." onKeyDown={e=>e.key==='Enter'&&addRole()}
                 className="flex-1 px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none focus:ring-2 focus:ring-amber-400/20 text-sm"/>
               <Btn icon={Plus} variant="amber" onClick={addRole} disabled={!newRole.trim()}>Add Role</Btn>
@@ -2146,7 +2146,7 @@ const StaffView = ({ currentUser }) => {
           </Card>
         </div>
       ) : (
-        <>
+      <>
       <div className="flex gap-2">
         {[['active',`Active (${staff.length})`],['archived',`Archived (${archived.length})`]].map(([t,l]) => (
           <button key={t} onClick={() => setShowTab(t)}
@@ -2825,10 +2825,10 @@ export default function App() {
     }
     switch(view) {
       case 'dashboard':  return <DashboardView currentUser={currentUser} isAdmin={isAdmin} onSelectClient={id => { setSelectedClientId(id); setView('client-detail'); }}/>;
-      case 'clients':    return <ClientsView   currentUser={currentUser} isAdmin={isAdmin} onSelectClient={id => { setSelectedClientId(id); setView('client-detail'); }}/>;
+      case 'clients':    return <ClientsView   currentUser={currentUser} isAdmin={isAdmin} staffList={staffList} onSelectClient={id => { setSelectedClientId(id); setView('client-detail'); }}/>;
       case 'intake':     return <SmartIntakeView currentUser={currentUser} onClientCreated={id=>{ setSelectedClientId(id); setView('client-detail'); }} staffList={staffList}/>;
       case 'schengen':   return <SchengenEngineView currentUser={currentUser}/>;
-      case 'docupload':  return <DocUploadView currentUser={currentUser} isAdmin={isAdmin}/>;
+      case 'docupload':  return <DocUploadView currentUser={currentUser} isAdmin={isAdmin} staffList={staffList}/>;
       case 'staff':      return isAdmin ? <StaffView currentUser={currentUser}/> : null;
       case 'activity':   return isAdmin ? <ActivityView currentUser={currentUser}/> : null;
       case 'archive':    return <ArchiveView currentUser={currentUser} isAdmin={isAdmin} onSelectClient={id => { setSelectedClientId(id); setView('client-detail'); }}/>;
@@ -3051,7 +3051,7 @@ ${client.city||'Lahore'}, Pakistan`;
 };
 
 // ─── SMART INTAKE VIEW ─────────────────────────────────────────────────────
-const SmartIntakeView = ({ currentUser, onClientCreated }) => {
+const SmartIntakeView = ({ currentUser, onClientCreated, staffList = [] }) => {
   const [text, setText] = useState('');
   const [parsed, setParsed] = useState(null);
   const [form, setForm] = useState({});
@@ -3427,7 +3427,7 @@ const syncToDrive = async (file, clientName, clientId, docType) => {
 };
 
 // ─── DOCUMENT UPLOAD VIEW ──────────────────────────────────────────────────
-const DocUploadView = ({ currentUser, isAdmin }) => {
+const DocUploadView = ({ currentUser, isAdmin, staffList = [] }) => {
   const [clients, setClients] = useState([]);
   const [selClient, setSelClient] = useState('');
   const [file, setFile] = useState(null);
