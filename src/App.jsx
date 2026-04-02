@@ -3156,6 +3156,46 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
   const [progress, setProgress] = useState(0);
   const [uploaded, setUploaded] = useState([]);
   const [loadingDocs, setLoadingDocs] = useState(false);
+  const [dynamicDocTypes, setDynamicDocTypes] = useState(DOC_TYPES);
+  const [newDocTypeInline, setNewDocTypeInline] = useState('');
+  const [showAddDocType, setShowAddDocType] = useState(false);
+  const [editDocType, setEditDocType] = useState(null);
+  const [editDocTypeVal, setEditDocTypeVal] = useState('');
+
+  // Load dynamic doc types
+  useEffect(()=>{
+    if(!db) return;
+    const unsub = onSnapshot(collection(db, DB_PATH('doc_types')), s => {
+      if (s.docs.length > 0) {
+        setDynamicDocTypes(s.docs.map(d=>({id:d.id,label:d.data().label,isDefault:false})).sort((a,b)=>a.label.localeCompare(b.label)));
+      } else {
+        setDynamicDocTypes(DOC_TYPES.map((t,i)=>({id:`dt_${i}`,label:t,isDefault:true})));
+      }
+    });
+    return unsub;
+  },[]);
+
+  const addDocTypeInline = async () => {
+    if (!newDocTypeInline.trim()) return;
+    const id = genId('dt');
+    await setDoc(doc(db, DB_PATH('doc_types'), id), { id, label:newDocTypeInline.trim(), addedBy:currentUser.name, addedAt:ts() });
+    setDocType(newDocTypeInline.trim());
+    setNewDocTypeInline(''); setShowAddDocType(false);
+  };
+
+  const deleteDocTypeInline = async (dt) => {
+    if (dt.isDefault) { alert('Cannot delete default document types. You can add custom ones.'); return; }
+    if (!window.confirm(`Remove "${dt.label}"?`)) return;
+    await deleteDoc(doc(db, DB_PATH('doc_types'), dt.id));
+    if (docType === dt.label) setDocType('Passport');
+  };
+
+  const saveEditDocType = async () => {
+    if (!editDocType || !editDocTypeVal.trim()) return;
+    await updateDoc(doc(db, DB_PATH('doc_types'), editDocType.id), { label: editDocTypeVal.trim() });
+    if (docType === editDocType.label) setDocType(editDocTypeVal.trim());
+    setEditDocType(null); setEditDocTypeVal('');
+  };
 
   useEffect(()=>{
     if(!db) return;
@@ -3180,40 +3220,69 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
   const [uploadStatus, setUploadStatus] = useState('');
 
   const handleUpload = async () => {
-    if(!file||!selClient) { alert('Select client and file first.'); return; }
-    if(!storage) { alert('Firebase Storage not configured. Check your Firebase console.'); return; }
+    if (!file || !selClient) { alert('Select client and file first.'); return; }
+    if (!DRIVE_URL) { alert('Google Drive not configured. Add VITE_GOOGLE_SCRIPT_URL to Vercel environment variables.'); return; }
     setUploading(true); setProgress(0);
-    setUploadStatus('📤 Uploading to Firebase Cloud...');
+    const clientObj = clients.find(c => c.id === selClient);
+    const clientName = clientObj?.name || 'Unknown';
     try {
-      const path = `clients/${selClient}/${docType}/${Date.now()}_${file.name}`;
-      const sRef = storageRef(storage, path);
-      const task = uploadBytesResumable(sRef, file);
-      await new Promise((res, rej) => {
-        task.on('state_changed',
-          snap => setProgress(Math.round(snap.bytesTransferred / snap.totalBytes * 100)),
-          err  => rej(err),
-          ()   => res()
-        );
+      // Step 1: Read file
+      setUploadStatus('📂 Reading file...');
+      setProgress(15);
+      const base64 = await new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onload  = e => res(e.target.result.split(',')[1]);
+        reader.onerror = () => rej(new Error('File read failed'));
+        reader.readAsDataURL(file);
       });
-      const url = await getDownloadURL(sRef);
-      const clientObj = clients.find(c=>c.id===selClient);
-      const clientName = clientObj?.name || 'Unknown';
-      // Sync to Google Drive in background
-      let driveData = {};
-      if (DRIVE_URL) {
-        setUploadStatus('🔄 Syncing to Google Drive...');
-        const driveResult = await syncToDrive(file, clientName, selClient, docType);
-        if (driveResult) driveData = driveResult;
-      }
+
+      // Step 2: Upload to Google Drive
+      setProgress(35);
+      setUploadStatus('☁️ Uploading to Google Drive...');
+      const resp = await fetch(DRIVE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'uploadFile',
+          fileName: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          base64Data: base64,
+          clientName,
+          clientId: selClient,
+          docType,
+          fileNumber: clientObj?.fileNumber || '',
+        }),
+      });
+      setProgress(80);
+      const result = await resp.json();
+      if (!result.success) throw new Error(result.error || 'Drive upload failed');
+
+      // Step 3: Save record to Firestore
+      setProgress(92);
+      setUploadStatus('💾 Saving record to CRM...');
       const docId = genId('doc');
-      const docData = { id:docId, name:file.name, type:docType, url, path, size:file.size, uploadedBy:currentUser.name, uploadedAt:ts(), clientId:selClient, storage: DRIVE_URL ? 'firebase+drive' : 'firebase', ...driveData };
-      await setDoc(doc(db, SUB_PATH('clients',selClient,'documents'), docId), docData);
-      await logActivity('doc_uploaded', `Doc uploaded: ${file.name} (${fmtFileSize(file.size)})`, currentUser);
-      setUploaded(p=>[docData,...p]);
-      setFile(null); setProgress(0);
-      setUploadStatus(driveData.driveUrl ? '✅ Saved to Firebase + Google Drive!' : '✅ Saved to Firebase!');
-      setTimeout(()=>setUploadStatus(''), 4000);
-    } catch(e) { alert('Upload failed: '+e.message); setUploadStatus(''); }
+      const docData = {
+        id: docId, name: file.name, type: docType,
+        driveUrl: result.fileUrl || '',
+        driveFolderUrl: result.folderUrl || '',
+        driveId: result.fileId || '',
+        size: file.size,
+        uploadedBy: currentUser.name,
+        uploadedAt: ts(),
+        clientId: selClient,
+        storage: 'google-drive',
+      };
+      await setDoc(doc(db, SUB_PATH('clients', selClient, 'documents'), docId), docData);
+      await logActivity('doc_uploaded', `Uploaded to Drive: ${file.name} (${fmtFileSize(file.size)})`, currentUser);
+      setUploaded(p => [docData, ...p]);
+      setFile(null);
+      setProgress(100);
+      setUploadStatus('✅ Uploaded to Google Drive! Client folder created.');
+      setTimeout(() => { setUploadStatus(''); setProgress(0); }, 5000);
+    } catch (e) {
+      alert('Upload failed: ' + e.message);
+      setUploadStatus(''); setProgress(0);
+    }
     setUploading(false);
   };
 
@@ -3222,9 +3291,9 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
       <div className="bg-gradient-to-r from-[#1a1a2e] to-[#0f3460] rounded-2xl p-6 text-white">
         <div className="flex items-center gap-3 mb-2">
           <div className="bg-amber-500 p-2 rounded-xl"><Cloud size={20}/></div>
-          <h2 className="text-xl font-black">☁️ Document Upload to Firebase</h2>
+          <h2 className="text-xl font-black">📁 Document Upload to Google Drive</h2>
         </div>
-        <p className="text-white/60 text-sm">Upload client documents directly to Firebase Cloud Storage. Secure, permanent, accessible from anywhere.</p>
+        <p className="text-white/60 text-sm">Upload client documents to Google Drive — free 15GB, auto-organized by client, accessible from phone and computer.</p>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
         <Card>
@@ -3239,11 +3308,48 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
               </select>
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-500 mb-1">Document Type</label>
+              <label className="block text-xs font-bold text-slate-500 mb-1">Document Type
+                {isAdmin && <button onClick={()=>setShowAddDocType(v=>!v)} className="ml-2 text-amber-600 text-[10px] font-black hover:underline">+ Add / Manage</button>}
+              </label>
               <select value={docType} onChange={e=>setDocType(e.target.value)}
                 className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 outline-none text-sm">
-                {DOC_TYPES.map(t=><option key={t}>{t}</option>)}
+                {dynamicDocTypes.map(t=><option key={t.id||t} value={t.label||t}>{t.label||t}</option>)}
               </select>
+              {showAddDocType && isAdmin && (
+                <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-2">
+                  <p className="text-xs font-black text-amber-700">Manage Document Types</p>
+                  <div className="flex gap-2">
+                    <input value={newDocTypeInline} onChange={e=>setNewDocTypeInline(e.target.value)}
+                      placeholder="New type name..." onKeyDown={e=>e.key==='Enter'&&addDocTypeInline()}
+                      className="flex-1 px-2 py-1.5 rounded-lg border border-amber-300 text-xs outline-none"/>
+                    <button onClick={addDocTypeInline} className="px-3 py-1.5 bg-amber-600 text-white text-xs font-bold rounded-lg">Add</button>
+                  </div>
+                  <div className="max-h-36 overflow-y-auto space-y-1">
+                    {dynamicDocTypes.map(dt=>(
+                      <div key={dt.id||dt} className="flex items-center justify-between px-2 py-1 bg-white rounded-lg group hover:bg-slate-50">
+                        {editDocType?.id===dt.id ? (
+                          <div className="flex gap-1 flex-1">
+                            <input value={editDocTypeVal} onChange={e=>setEditDocTypeVal(e.target.value)}
+                              className="flex-1 px-2 py-0.5 rounded border border-blue-300 text-xs outline-none"/>
+                            <button onClick={saveEditDocType} className="px-2 py-0.5 bg-blue-600 text-white text-[10px] rounded font-bold">Save</button>
+                            <button onClick={()=>setEditDocType(null)} className="px-2 py-0.5 bg-slate-200 text-[10px] rounded">Cancel</button>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="text-xs text-slate-700">{dt.label||dt}</span>
+                            <div className="flex gap-1 opacity-0 group-hover:opacity-100">
+                              {!dt.isDefault && <button onClick={()=>{setEditDocType(dt);setEditDocTypeVal(dt.label);}} className="text-blue-500 text-[10px] font-bold px-1 hover:underline">Edit</button>}
+                              {!dt.isDefault && <button onClick={()=>deleteDocTypeInline(dt)} className="text-red-500 text-[10px] font-bold px-1 hover:underline">Del</button>}
+                              {dt.isDefault && <span className="text-slate-300 text-[10px]">default</span>}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                  <button onClick={()=>setShowAddDocType(false)} className="text-xs text-slate-400 hover:text-slate-600 font-bold">Close ✕</button>
+                </div>
+              )}
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-500 mb-1">Select File</label>
@@ -3259,12 +3365,12 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
                 <p className="text-xs text-amber-600 font-bold">{uploadStatus || `Uploading... ${progress}%`}</p>
               </div>
             )}
-            <div className={`p-2 rounded-xl text-xs font-bold border ${DRIVE_URL ? 'bg-green-50 border-green-100 text-green-700' : 'bg-blue-50 border-blue-100 text-blue-700'}`}>
-              {DRIVE_URL ? '✅ Firebase + Google Drive sync active — files backed up to topnotchconsultancy@gmail.com' : '🔥 Firebase Storage only — files saved securely'}
+            <div className={`p-2 rounded-xl text-xs font-bold border ${DRIVE_URL ? 'bg-green-50 border-green-100 text-green-700' : 'bg-red-50 border-red-100 text-red-700'}`}>
+              {DRIVE_URL ? '✅ Google Drive active — files saved to topnotchconsultancy@gmail.com (15GB free)' : '⚠️ Google Drive not configured — uploads disabled'}
             </div>
             <button onClick={handleUpload} disabled={uploading||!file||!selClient}
               className="w-full py-3 bg-amber-600 hover:bg-amber-500 text-white font-black rounded-xl flex items-center justify-center gap-2 disabled:opacity-50 transition">
-              {uploading?<Spinner/>:<><Upload size={16}/> Upload to Firebase Cloud</>}
+              {uploading?<Spinner/>:<><Upload size={16}/> Upload to Google Drive</>}
             </button>
           </div>
         </Card>
