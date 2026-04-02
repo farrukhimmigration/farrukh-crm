@@ -1445,6 +1445,33 @@ const ClientsView = ({ currentUser, isAdmin, onSelectClient }) => {
     city:'', address:'', travelHistory:'', priorRefusals:'', fbrStatus:'', ntn:'', notes:'',
   });
   const [formError, setFormError] = useState('');
+  const [selected, setSelected]   = useState(new Set());
+  const [deleting, setDeleting]   = useState(false);
+
+  const toggleSelect = (id, e) => {
+    e.stopPropagation();
+    setSelected(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+  };
+
+  const deleteSelected = async () => {
+    if (!selected.size) return;
+    if (!window.confirm(`Archive ${selected.size} client(s)? They can be recovered from Archive.`)) return;
+    setDeleting(true);
+    for (const id of selected) {
+      const c = clients.find(x=>x.id===id);
+      await updateDoc(doc(db, DB_PATH('clients'), id), { deleted:true, deletedAt:ts(), deletedBy:currentUser.name });
+      await logActivity('client_archived', `Archived: ${c?.name}`, currentUser);
+    }
+    setSelected(new Set());
+    setDeleting(false);
+  };
+
+  const deleteSingle = async (c, e) => {
+    e.stopPropagation();
+    if (!window.confirm(`Archive "${c.name}"? Recoverable from Archive.`)) return;
+    await updateDoc(doc(db, DB_PATH('clients'), c.id), { deleted:true, deletedAt:ts(), deletedBy:currentUser.name });
+    await logActivity('client_archived', `Archived: ${c.name}`, currentUser);
+  };
 
   useEffect(() => {
     if (!db) return;
@@ -1455,14 +1482,25 @@ const ClientsView = ({ currentUser, isAdmin, onSelectClient }) => {
     return unsub;
   }, []);
 
+  const genFileNumber = (cnic) => {
+    const now = new Date();
+    const day   = String(now.getDate()).padStart(2,'0');
+    const month = String(now.getMonth()+1).padStart(2,'0');
+    const year  = String(now.getFullYear()).slice(-2);
+    const cnicClean = (cnic||'').replace(/\D/g,'');
+    const last4 = cnicClean.slice(-4) || '0000';
+    return `FC${day}${month}${last4}${year}`;
+  };
+
   const addClient = async () => {
     setFormError('');
     if (!form.name.trim()) { setFormError('Full Name is required.'); return; }
     if (!form.cnic.trim()) { setFormError('CNIC is required.'); return; }
     setSaving(true);
     const id = genId('cli');
+    const fileNumber = genFileNumber(form.cnic);
     await setDoc(doc(db, DB_PATH('clients'), id), {
-      id, ...form, deleted:false, permanentlyDeleted:false, addedBy:currentUser.name, createdAt:ts(),
+      id, ...form, fileNumber, deleted:false, permanentlyDeleted:false, addedBy:currentUser.name, createdAt:ts(),
     });
     await logActivity('client_created', `Added new client: ${form.name}`, currentUser);
     setForm({ name:'',cnic:'',passport:'',phone:'',email:'',nationality:'Pakistani',occupation:'',employer:'',income:'',visaInterest:'',dob:'',passportExpiry:'',city:'',address:'',travelHistory:'',priorRefusals:'',fbrStatus:'',ntn:'',notes:'' });
@@ -1479,7 +1517,14 @@ const ClientsView = ({ currentUser, isAdmin, onSelectClient }) => {
   return (
     <div className="space-y-6">
       <SectionHeader title="Clients" subtitle={`${clients.length} registered clients`} actions={
-        isAdmin && <Btn icon={Plus} variant="amber" onClick={() => setShowAdd(true)}>New Client</Btn>
+        isAdmin && <div className="flex gap-2">
+          {selected.size > 0 && (
+            <Btn icon={Trash2} variant="red" onClick={deleteSelected} loading={deleting}>
+              Delete {selected.size} Selected
+            </Btn>
+          )}
+          <Btn icon={Plus} variant="amber" onClick={() => setShowAdd(true)}>New Client</Btn>
+        </div>
       }/>
 
       <div className="flex gap-3 flex-wrap">
@@ -1506,8 +1551,13 @@ const ClientsView = ({ currentUser, isAdmin, onSelectClient }) => {
       ) : (
         <div className="grid gap-3">
           {filtered.map(c => (
-            <div key={c.id} onClick={() => onSelectClient(c.id)}
-              className="flex items-center gap-4 p-5 bg-white border border-slate-100 rounded-2xl hover:shadow-md hover:border-amber-200 transition cursor-pointer group">
+            <div key={c.id} className={`flex items-center gap-4 p-5 bg-white border rounded-2xl hover:shadow-md transition group ${selected.has(c.id) ? 'border-amber-400 bg-amber-50/30' : 'border-slate-100 hover:border-amber-200'}`}>
+              {isAdmin && (
+                <input type="checkbox" checked={selected.has(c.id)} onChange={e=>toggleSelect(c.id,e)}
+                  onClick={e=>e.stopPropagation()}
+                  className="w-4 h-4 accent-amber-600 flex-shrink-0 cursor-pointer"/>
+              )}
+              <div onClick={() => onSelectClient(c.id)} className="flex items-center gap-4 flex-1 cursor-pointer min-w-0">
               <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500 to-amber-600 flex items-center justify-center text-white font-black text-lg shadow-lg shadow-amber-500/20 flex-shrink-0">
                 {c.name?.[0]?.toUpperCase()}
               </div>
@@ -1517,6 +1567,7 @@ const ClientsView = ({ currentUser, isAdmin, onSelectClient }) => {
                   {c.priorRefusals && <Badge label="Prior Refusal" color="bg-red-50 text-red-600" small/>}
                 </div>
                 <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 mt-0.5">
+                  {c.fileNumber && <span className="font-mono font-black text-amber-600 bg-amber-50 px-2 py-0.5 rounded">📁 {c.fileNumber}</span>}
                   <span className="font-mono">{c.cnic}</span>
                   {c.passport && <span className="font-mono">PP: {c.passport}</span>}
                   {c.phone    && <span>{c.phone}</span>}
@@ -1532,6 +1583,14 @@ const ClientsView = ({ currentUser, isAdmin, onSelectClient }) => {
                 <p className="text-[10px] text-slate-400">{c.addedBy}</p>
                 <ChevronRight size={16} className="text-slate-300 mt-1 ml-auto group-hover:text-amber-500 transition" />
               </div>
+              </div>
+              {isAdmin && (
+                <button onClick={e=>deleteSingle(c,e)}
+                  className="flex-shrink-0 p-2 hover:bg-red-50 text-slate-300 hover:text-red-500 rounded-xl transition opacity-0 group-hover:opacity-100"
+                  title="Archive this client">
+                  <Trash2 size={16}/>
+                </button>
+              )}
             </div>
           ))}
         </div>
@@ -2198,6 +2257,37 @@ const SettingsView = ({ currentUser, isAdmin }) => {
   const [categories, setCategories] = useState([]);
   const [newCat,     setNewCat]     = useState('');
   const [saving,     setSaving]     = useState(false);
+  const [docTypes,   setDocTypes]   = useState([]);
+  const [newDocType, setNewDocType] = useState('');
+  const [savingDoc,  setSavingDoc]  = useState(false);
+
+  useEffect(()=>{
+    if(!db) return;
+    // Load custom doc types from Firestore, fall back to defaults
+    const unsub = onSnapshot(collection(db, DB_PATH('doc_types')), s => {
+      if (s.docs.length > 0) {
+        setDocTypes(s.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>a.label.localeCompare(b.label)));
+      } else {
+        // Initialize with defaults
+        setDocTypes(DOC_TYPES.map((t,i)=>({ id:`dt_${i}`, label:t, isDefault:true })));
+      }
+    });
+    return unsub;
+  },[]);
+
+  const addDocType = async () => {
+    if (!newDocType.trim()) return;
+    setSavingDoc(true);
+    const id = genId('dt');
+    await setDoc(doc(db, DB_PATH('doc_types'), id), { id, label:newDocType.trim(), addedBy:currentUser.name, addedAt:ts() });
+    setNewDocType('');
+    setSavingDoc(false);
+  };
+
+  const deleteDocType = async (dt) => {
+    if (!window.confirm(`Remove document type "${dt.label}"?`)) return;
+    await deleteDoc(doc(db, DB_PATH('doc_types'), dt.id));
+  };
 
   useEffect(() => {
     if (!db) return;
@@ -2265,6 +2355,32 @@ const SettingsView = ({ currentUser, isAdmin }) => {
               ))}
             </div>
           )}
+        </Card>
+      )}
+
+      {isAdmin && (
+        <Card>
+          <h3 className="font-bold text-slate-800 mb-5 flex items-center gap-2"><FileText size={16} className="text-blue-500"/>Document Types Management</h3>
+          <p className="text-xs text-slate-500 mb-4">Add, view or remove document types used in file uploads. Custom types appear alongside defaults.</p>
+          <div className="flex gap-2 mb-4">
+            <input className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm outline-none focus:ring-2 focus:ring-amber-500/20"
+              placeholder="New document type (e.g. Affidavit, Sponsorship Letter)..."
+              value={newDocType} onChange={e=>setNewDocType(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addDocType()} />
+            <Btn icon={Plus} variant="amber" onClick={addDocType} loading={savingDoc} disabled={!newDocType.trim()}>Add</Btn>
+          </div>
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {docTypes.map(dt => (
+              <div key={dt.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl group hover:bg-slate-100">
+                <span className="text-sm font-semibold text-slate-700">📄 {dt.label}</span>
+                {!dt.isDefault && (
+                  <button onClick={() => deleteDocType(dt)} className="text-slate-300 hover:text-red-500 transition opacity-0 group-hover:opacity-100 p-1">
+                    <X size={16}/>
+                  </button>
+                )}
+                {dt.isDefault && <span className="text-[10px] text-slate-300 font-bold">DEFAULT</span>}
+              </div>
+            ))}
+          </div>
         </Card>
       )}
 
@@ -2708,7 +2824,7 @@ const SmartIntakeView = ({ currentUser, onClientCreated }) => {
           <div className="bg-amber-500 p-2 rounded-xl"><Zap size={20}/></div>
           <h2 className="text-xl font-black">🧠 Smart Client Intake</h2>
         </div>
-        <p className="text-white/60 text-sm">Paste client info in ANY format — WhatsApp message, text, notes — system auto-extracts all fields. 100% Free, No API needed.</p>
+        <p className="text-white/60 text-sm">Paste client info in ANY format — WhatsApp message, text, notes — system auto-extracts all fields instantly.</p>
       </div>
 
       {/* Step indicators */}
@@ -3006,20 +3122,28 @@ const DRIVE_URL = import.meta.env?.VITE_GOOGLE_SCRIPT_URL || '';
 const syncToDrive = async (file, clientName, clientId, docType) => {
   if (!DRIVE_URL) return null;
   try {
-    const reader = new FileReader();
     const base64 = await new Promise((res, rej) => {
+      const reader = new FileReader();
       reader.onload = e => res(e.target.result.split(',')[1]);
       reader.onerror = () => rej(new Error('Read failed'));
       reader.readAsDataURL(file);
     });
+    const payload = JSON.stringify({
+      action:'uploadFile', fileName:file.name, mimeType:file.type,
+      base64Data:base64, clientName, clientId, docType
+    });
+    // Google Apps Script requires Content-Type text/plain to avoid CORS preflight
     const resp = await fetch(DRIVE_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action:'uploadFile', fileName:file.name, mimeType:file.type, base64Data:base64, clientName, clientId, docType }),
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: payload,
     });
     const data = await resp.json();
-    return data.success ? { driveUrl:data.fileUrl, driveFolderUrl:data.folderUrl, driveId:data.fileId } : null;
-  } catch { return null; }
+    return data.success ? { driveUrl:data.fileUrl||'', driveFolderUrl:data.folderUrl||'', driveId:data.fileId||'' } : null;
+  } catch(e) {
+    console.warn('Drive sync error:', e.message);
+    return null;
+  }
 };
 
 // ─── DOCUMENT UPLOAD VIEW ──────────────────────────────────────────────────
@@ -3035,8 +3159,15 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
 
   useEffect(()=>{
     if(!db) return;
-    getDocs(query(collection(db, DB_PATH('clients')), where('deleted','==',false), orderBy('createdAt','desc')))
-      .then(s=>setClients(s.docs.map(d=>({id:d.id,...d.data()}))));
+    // Use onSnapshot for real-time client list (fixes empty dropdown)
+    const unsub = onSnapshot(collection(db, DB_PATH('clients')), s => {
+      const active = s.docs
+        .map(d=>({id:d.id,...d.data()}))
+        .filter(c=>!c.deleted && !c.permanentlyDeleted)
+        .sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+      setClients(active);
+    });
+    return unsub;
   },[]);
 
   useEffect(()=>{
@@ -3057,8 +3188,13 @@ const DocUploadView = ({ currentUser, isAdmin }) => {
       const path = `clients/${selClient}/${docType}/${Date.now()}_${file.name}`;
       const sRef = storageRef(storage, path);
       const task = uploadBytesResumable(sRef, file);
-      task.on('state_changed', snap => setProgress(Math.round(snap.bytesTransferred/snap.totalBytes*100)));
-      await new Promise((res,rej) => task.on('state_changed', null, rej, res));
+      await new Promise((res, rej) => {
+        task.on('state_changed',
+          snap => setProgress(Math.round(snap.bytesTransferred / snap.totalBytes * 100)),
+          err  => rej(err),
+          ()   => res()
+        );
+      });
       const url = await getDownloadURL(sRef);
       const clientObj = clients.find(c=>c.id===selClient);
       const clientName = clientObj?.name || 'Unknown';
