@@ -459,87 +459,169 @@ const LoginScreen = ({ staff, onLogin }) => {
 // 7. DOCUMENT UPLOAD COMPONENT
 // ══════════════════════════════════════════════════════════════════════════
 
-const DocUpload = ({ clientId, currentUser, onUploaded }) => {
-  const [file,      setFile]      = useState(null);
-  const [docType,   setDocType]   = useState('');
-  const [notes,     setNotes]     = useState('');
-  const [progress,  setProgress]  = useState(0);
-  const [uploading, setUploading] = useState(false);
-  const [error,     setError]     = useState('');
+const DocUpload = ({ clientId, currentUser, onUploaded, clientName = '', fileNumber = '' }) => {
+  const [file,         setFile]         = useState(null);
+  const [docType,      setDocType]      = useState('');
+  const [notes,        setNotes]        = useState('');
+  const [progress,     setProgress]     = useState(0);
+  const [uploading,    setUploading]    = useState(false);
+  const [statusMsg,    setStatusMsg]    = useState('');
+  const [error,        setError]        = useState('');
+  const [allDocTypes,  setAllDocTypes]  = useState(DOC_TYPES);
+  const [newTypeVal,   setNewTypeVal]   = useState('');
+  const [showManage,   setShowManage]   = useState(false);
   const fileRef = useRef();
+
+  // Load dynamic doc types from Firestore
+  useEffect(() => {
+    if (!db) return;
+    const unsub = onSnapshot(collection(db, DB_PATH('doc_types')), s => {
+      if (s.docs.length > 0) {
+        setAllDocTypes(s.docs.map(d => d.data().label).sort());
+      }
+    });
+    return unsub;
+  }, []);
+
+  const addDocType = async () => {
+    if (!newTypeVal.trim()) return;
+    const id = genId('dt');
+    await setDoc(doc(db, DB_PATH('doc_types'), id), { id, label: newTypeVal.trim(), addedBy: currentUser.name, addedAt: ts() });
+    setDocType(newTypeVal.trim()); setNewTypeVal('');
+  };
+
+  const removeDocType = async (label) => {
+    if (DOC_TYPES.includes(label)) { alert('Cannot delete default types. Only custom types can be deleted.'); return; }
+    if (!window.confirm(`Delete type "${label}"?`)) return;
+    const s = await getDocs(collection(db, DB_PATH('doc_types')));
+    const match = s.docs.find(d => d.data().label === label);
+    if (match) await deleteDoc(doc(db, DB_PATH('doc_types'), match.id));
+    if (docType === label) setDocType('');
+  };
 
   const upload = async () => {
     if (!file || !docType) { setError('Please select a document type and file.'); return; }
-    setUploading(true); setError('');
+    const SCRIPT_URL = import.meta.env?.VITE_GOOGLE_SCRIPT_URL || '';
+    if (!SCRIPT_URL) { setError('Google Drive not configured. Contact administrator.'); return; }
+    setUploading(true); setError(''); setProgress(0);
     try {
-      const docId        = genId('doc');
-      const safeFileName = `${docId}_${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
-      let url = null;
-
-      if (storage) {
-        try {
-          const sRef = storageRef(storage, `clients/${clientId}/documents/${safeFileName}`);
-          await new Promise((resolve, reject) => {
-            const task = uploadBytesResumable(sRef, file);
-            task.on('state_changed',
-              snap => setProgress(Math.round(snap.bytesTransferred / snap.totalBytes * 100)),
-              reject,
-              async () => { url = await getDownloadURL(task.snapshot.ref); resolve(); }
-            );
-          });
-        } catch (storageErr) {
-          // Storage unavailable — fallback to base64 for small files only
-          if (file.size < 1.5 * 1024 * 1024) {
-            url = await fileToBase64(file);
-          } else {
-            throw new Error('Firebase Storage is not configured. Files larger than 1.5 MB require Storage to be enabled in your Firebase project.');
-          }
-        }
-      } else if (file.size < 1.5 * 1024 * 1024) {
-        url = await fileToBase64(file);
-      } else {
-        throw new Error('Firebase Storage is required for files larger than 1.5 MB. Enable it in Firebase Console.');
-      }
-
+      setStatusMsg('📂 Reading file...');
+      setProgress(15);
+      const base64 = await new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onload  = e => res(e.target.result.split(',')[1]);
+        reader.onerror = () => rej(new Error('File read failed'));
+        reader.readAsDataURL(file);
+      });
+      setProgress(35);
+      setStatusMsg('☁️ Uploading to Google Drive...');
+      const resp = await fetch(SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'uploadFile',
+          fileName: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          base64Data: base64,
+          clientName: clientName || clientId,
+          clientId,
+          docType,
+          fileNumber,
+        }),
+      });
+      setProgress(80);
+      const result = await resp.json();
+      if (!result.success) throw new Error(result.error || 'Drive upload failed');
+      setProgress(92);
+      setStatusMsg('💾 Saving to CRM...');
+      const docId = genId('doc');
       const docMeta = {
-        id: docId, clientId, docType,
-        name: file.name, safeFileName,
-        size: file.size, mimeType: file.type,
-        url: url || null, notes,
+        id: docId, clientId, docType, notes,
+        name: file.name, size: file.size, mimeType: file.type,
+        driveUrl: result.fileUrl || '',
+        driveFolderUrl: result.folderUrl || '',
+        driveId: result.fileId || '',
+        storage: 'google-drive',
         uploadedBy: currentUser.name, uploadedAt: ts(), deleted: false,
       };
       await setDoc(doc(db, SUB_PATH('clients', clientId, 'documents'), docId), docMeta);
-      await logActivity('document_uploaded', `${docType}: ${file.name}`, currentUser);
+      await logActivity('document_uploaded', `${docType}: ${file.name} → Drive`, currentUser);
       onUploaded(docMeta);
-      setFile(null); setDocType(''); setNotes(''); setProgress(0);
+      setFile(null); setDocType(''); setNotes(''); setProgress(100);
+      setStatusMsg('✅ Uploaded to Google Drive!');
       if (fileRef.current) fileRef.current.value = '';
-    } catch (e) { setError(e.message || 'Upload failed.'); }
+      setTimeout(() => { setStatusMsg(''); setProgress(0); }, 4000);
+    } catch (e) { setError(e.message || 'Upload failed.'); setProgress(0); setStatusMsg(''); }
     setUploading(false);
   };
 
   return (
     <div className="space-y-4 p-5 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200">
-      <p className="text-xs font-black text-slate-500 uppercase tracking-wider flex items-center gap-2"><Upload size={12} /> Upload Document</p>
-      <Select label="Document Type" required value={docType} onChange={e => setDocType(e.target.value)} options={DOC_TYPES} placeholder="Select type..." />
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-black text-slate-500 uppercase tracking-wider flex items-center gap-2"><Upload size={12}/> Upload Document to Google Drive</p>
+        <span className="text-[10px] text-green-600 font-bold bg-green-50 px-2 py-0.5 rounded-full">📁 Drive Storage</span>
+      </div>
+
+      {/* Document Type with Add/Manage */}
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Document Type <span className="text-red-500">*</span></label>
+          <button onClick={() => setShowManage(v=>!v)} className="text-[10px] text-amber-600 font-black hover:underline">
+            {showManage ? '▲ Close' : '+ Add / Manage Types'}
+          </button>
+        </div>
+        <select value={docType} onChange={e => setDocType(e.target.value)}
+          className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-amber-400/20">
+          <option value="">-- Select Document Type --</option>
+          {allDocTypes.map(t => <option key={t} value={t}>{t}</option>)}
+        </select>
+        {showManage && (
+          <div className="mt-2 p-3 bg-white border border-amber-200 rounded-xl space-y-2">
+            <div className="flex gap-2">
+              <input value={newTypeVal} onChange={e=>setNewTypeVal(e.target.value)}
+                placeholder="New document type..." onKeyDown={e=>e.key==='Enter'&&addDocType()}
+                className="flex-1 px-3 py-1.5 rounded-lg border border-slate-200 text-xs outline-none focus:border-amber-400"/>
+              <button onClick={addDocType} className="px-3 py-1.5 bg-amber-600 text-white text-xs font-bold rounded-lg hover:bg-amber-500">Add</button>
+            </div>
+            <div className="max-h-40 overflow-y-auto space-y-1">
+              {allDocTypes.map(t => (
+                <div key={t} className="flex items-center justify-between px-2 py-1 hover:bg-slate-50 rounded-lg group">
+                  <span className="text-xs text-slate-700">📄 {t}</span>
+                  <div className="flex gap-2 opacity-0 group-hover:opacity-100">
+                    <button onClick={() => setDocType(t)} className="text-[10px] text-amber-600 font-bold hover:underline">Select</button>
+                    {!DOC_TYPES.includes(t) && (
+                      <button onClick={() => removeDocType(t)} className="text-[10px] text-red-500 font-bold hover:underline">Delete</button>
+                    )}
+                    {DOC_TYPES.includes(t) && <span className="text-[10px] text-slate-300">default</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="space-y-1">
         <label className="block text-[10px] font-black text-slate-400 uppercase tracking-wider">File <span className="text-red-500">*</span></label>
         <input ref={fileRef} type="file"
           accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.xlsx,.xls,.txt,.csv"
           onChange={e => { setFile(e.target.files[0]); setError(''); }}
           className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-bold file:bg-amber-600 file:text-white hover:file:bg-amber-500 cursor-pointer" />
-        {file && <p className="text-[10px] text-slate-500 mt-1">{file.name} • {fmtFileSize(file.size)}</p>}
+        {file && <p className="text-[10px] text-slate-500 mt-1">📄 {file.name} • {fmtFileSize(file.size)}</p>}
       </div>
       <Input label="Notes (optional)" placeholder="e.g., 6 months statement, Jan–Jun 2025" value={notes} onChange={e => setNotes(e.target.value)} />
-      {uploading && (
+      {(uploading || statusMsg) && (
         <div className="space-y-1">
           <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
-            <div className="h-full bg-amber-500 rounded-full transition-all" style={{width:`${progress}%`}} />
+            <div className="h-full bg-amber-500 rounded-full transition-all duration-500" style={{width:`${progress}%`}} />
           </div>
-          <p className="text-[10px] text-slate-500 text-center">{progress}% uploaded</p>
+          <p className="text-[10px] text-slate-600 font-bold text-center">{statusMsg || `${progress}% uploaded`}</p>
         </div>
       )}
       {error && <p className="text-red-500 text-xs flex items-center gap-1"><AlertTriangle size={12}/>{error}</p>}
-      <Btn icon={Upload} onClick={upload} disabled={uploading || !file || !docType} loading={uploading} className="w-full" variant="amber">Upload Document</Btn>
+      <Btn icon={Upload} onClick={upload} disabled={uploading || !file || !docType} loading={uploading} className="w-full" variant="amber">
+        Upload to Google Drive
+      </Btn>
     </div>
   );
 };
@@ -1124,7 +1206,7 @@ const ClientDetailView = ({ clientId, currentUser, isAdmin, onBack, staffList = 
               {showUpload ? 'Cancel Upload' : 'Upload Document'}
             </Btn>
           </div>
-          {showUpload && <DocUpload clientId={clientId} currentUser={currentUser} onUploaded={() => setShowUpload(false)} />}
+          {showUpload && <DocUpload clientId={clientId} currentUser={currentUser} clientName={client?.name||''} fileNumber={client?.fileNumber||''} onUploaded={() => setShowUpload(false)} />}
           {documents.length === 0
             ? <EmptyState icon={Folder} title="No documents yet" desc="Upload passports, bank statements, and other required documents" />
             : (
@@ -1135,19 +1217,32 @@ const ClientDetailView = ({ clientId, currentUser, isAdmin, onBack, staffList = 
                       {d.mimeType?.includes('image') ? <FileImage size={20}/> : d.mimeType?.includes('pdf') ? <FileText size={20} className="text-red-500"/> : <FileCheck size={20}/>}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="font-bold text-slate-800 text-sm">{d.docType}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-bold text-slate-800 text-sm">{d.docType}</p>
+                        {d.driveUrl && <span className="text-[9px] bg-green-100 text-green-600 font-bold px-1.5 py-0.5 rounded-full">📁 Drive</span>}
+                      </div>
                       <p className="text-[10px] text-slate-400 truncate">{d.name} • {fmtFileSize(d.size)}</p>
                       <p className="text-[10px] text-slate-400">{fmtDate(d.uploadedAt)} • {d.uploadedBy}</p>
                       {d.notes && <p className="text-[10px] text-amber-600 font-semibold mt-0.5">{d.notes}</p>}
                     </div>
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
-                      {d.url && (
-                        <a href={d.url} target="_blank" rel="noopener noreferrer"
-                          className="p-2 hover:bg-blue-50 text-blue-500 rounded-xl transition" title="View"><Eye size={16}/></a>
+                      {(d.driveUrl || d.url) && (
+                        <a href={d.driveUrl || d.url} target="_blank" rel="noopener noreferrer"
+                          className="p-2 hover:bg-green-50 text-green-600 rounded-xl transition" title="View in Google Drive">
+                          <Eye size={16}/>
+                        </a>
+                      )}
+                      {d.driveFolderUrl && (
+                        <a href={d.driveFolderUrl} target="_blank" rel="noopener noreferrer"
+                          className="p-2 hover:bg-blue-50 text-blue-500 rounded-xl transition" title="Open Client Folder in Drive">
+                          <FolderOpen size={16}/>
+                        </a>
                       )}
                       {isAdmin && (
                         <button onClick={() => softDeleteDoc(d.id)}
-                          className="p-2 hover:bg-red-50 text-red-400 rounded-xl transition" title="Archive"><Trash2 size={16}/></button>
+                          className="p-2 hover:bg-red-50 text-red-400 rounded-xl transition" title="Delete Document">
+                          <Trash2 size={16}/>
+                        </button>
                       )}
                     </div>
                   </div>
